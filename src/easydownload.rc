@@ -1,0 +1,247 @@
+#include <windows.h>
+#include <commctrl.h>
+#include "resource.h"
+
+#pragma code_page(65001)
+
+// Application Icon
+IDI_APP_ICON        ICON                    "..\\res\\easydownload.ico"
+
+// Main Menu
+IDR_MAIN_MENU MENU
+BEGIN
+    POPUP "파일(&F)"
+    BEGIN
+        MENUITEM "새 다운로드(&N)...\tCtrl+N",         ID_TASK_NEW
+        MENUITEM "비디오 다운로드(&V)...\tCtrl+V",     ID_TASK_NEW_VIDEO
+        MENUITEM SEPARATOR
+        MENUITEM "종료(&X)",                         ID_APP_EXIT
+    END
+    POPUP "작업(&T)"
+    BEGIN
+        MENUITEM "시작 / 재개(&S)\tEnter",           ID_TASK_START
+        MENUITEM "일시정지(&P)\tSpace",              ID_TASK_PAUSE
+        MENUITEM "삭제(&D)\tDel",                    ID_TASK_DELETE
+        MENUITEM SEPARATOR
+        MENUITEM "저장 폴더 열기(&O)",               ID_TASK_OPEN_FOLDER
+        MENUITEM "파일 실행(&R)",                   ID_TASK_OPEN_FILE
+    END
+    POPUP "도구(&T)"
+    BEGIN
+        MENUITEM "크롬 확장 프로그램 설치 / 연동(&C)", ID_EXTENSION_INSTALL
+        MENUITEM "환경 설정(&S)...",                 ID_TASK_SETTINGS
+    END
+    POPUP "도움말(&H)"
+    BEGIN
+        MENUITEM "EasyDownload 정보(&A)...",         ID_ABOUT
+    END
+END
+
+// Tray Menu
+IDR_TRAY_MENU MENU
+BEGIN
+    POPUP ""
+    BEGIN
+        MENUITEM "EasyDownload 열기",                ID_TRAY_SHOW
+        MENUITEM SEPARATOR
+        MENUITEM "새 다운로드...",                   ID_TASK_NEW
+        MENUITEM "비디오 다운로드...",               ID_TASK_NEW_VIDEO
+        MENUITEM SEPARATOR
+        MENUITEM "프로그램 종료",                    ID_TRAY_EXIT
+    END
+END
+
+// New Download Dialog
+IDD_NEW_DOWNLOAD DIALOGEX 0, 0, 340, 150
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "새 다운로드 추가"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "다운로드 URL:", IDC_LBL_URL, 14, 12, 60, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_EDT_URL, 14, 25, 312, 14, ES_AUTOHSCROLL
+    
+    LTEXT           "저장 파일 경로:", IDC_LBL_SAVETO, 14, 46, 60, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_EDT_SAVE_PATH, 14, 59, 248, 14, ES_AUTOHSCROLL
+    PUSHBUTTON      "찾아보기(&B)...", IDC_BTN_BROWSE, 268, 59, 58, 14
+    
+    LTEXT           "분할 청크 수(1~12):", IDC_LBL_PARTS, 14, 82, 85, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_EDT_PARTS, 105, 80, 40, 14, ES_NUMBER | ES_CENTER
+    CONTROL         "", IDC_SPN_PARTS, "msctls_updown32", UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_AUTOBUDDY | UDS_ARROWKEYS | UDS_NOTHOUSANDS, 145, 80, 12, 14
+    
+    CONTROL         "다운로드 즉시 시작", IDC_CHK_START_IMMEDIATE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 175, 82, 140, 12
+    
+    DEFPUSHBUTTON   "다운로드 시작(&D)", IDOK, 185, 120, 68, 16
+    PUSHBUTTON      "취소", IDCANCEL, 258, 120, 68, 16
+END
+
+// Video Download Dialog
+IDD_NEW_VIDEO DIALOGEX 0, 0, 360, 228
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "비디오 / 스트림 다운로드"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "비디오 / M3U8 스트림 URL:", IDC_STATIC, 14, 10, 120, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_EDT_VIDEO_URL, 14, 22, 265, 14, ES_AUTOHSCROLL
+    PUSHBUTTON      "분석(&A)", IDC_BTN_ANALYZE, 285, 22, 60, 14
+    
+    LTEXT           "비디오 파일명:", IDC_STATIC, 14, 40, 100, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_EDT_VIDEO_TITLE, 14, 51, 331, 14, ES_AUTOHSCROLL
+
+    LTEXT           "저장 위치:", IDC_STATIC, 14, 69, 100, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_EDT_VIDEO_SAVEPATH, 14, 80, 265, 14, ES_AUTOHSCROLL
+    PUSHBUTTON      "찾아보기(&B)...", IDC_BTN_VIDEO_BROWSE, 285, 80, 60, 14
+    
+    LTEXT           "감지된 화질 및 해상도 선택:", IDC_STATIC, 14, 98, 150, 10, SS_LEFTNOWORDWRAP
+    CONTROL         "", IDC_LST_STREAMS, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 14, 110, 331, 70
+    
+    LTEXT           "대기 중...", IDC_LBL_VIDEO_STATUS, 14, 186, 200, 10, SS_LEFTNOWORDWRAP
+    
+    DEFPUSHBUTTON   "비디오 다운로드(&D)", IDOK, 205, 203, 75, 16
+    PUSHBUTTON      "닫기", IDCANCEL, 285, 203, 60, 16
+END
+
+// Settings Dialog
+IDD_SETTINGS DIALOGEX 0, 0, 340, 320
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "EasyDownload 환경 설정"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "다운로드 기본 경로", IDC_STATIC, 12, 8, 316, 42
+    EDITTEXT        IDC_EDT_DEFAULT_DIR, 20, 22, 236, 14, ES_AUTOHSCROLL
+    PUSHBUTTON      "폴더 변경...", IDC_BTN_DIR_BROWSE, 260, 22, 60, 14
+    
+    GROUPBOX        "파일 형식별 전용 저장 폴더 및 확장자 지정", IDC_STATIC, 12, 54, 316, 100
+    LTEXT           "카테고리:", IDC_STATIC, 20, 68, 45, 10, SS_LEFTNOWORDWRAP
+    COMBOBOX        IDC_CMB_CATEGORY, 70, 66, 110, 90, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    
+    LTEXT           "대상 확장자:", IDC_STATIC, 20, 86, 45, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_EDT_CATEGORY_EXTS, 70, 84, 250, 14, ES_AUTOHSCROLL
+    
+    LTEXT           "지정 저장 폴더:", IDC_STATIC, 20, 104, 52, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_EDT_CATEGORY_DIR, 74, 102, 168, 14, ES_AUTOHSCROLL
+    PUSHBUTTON      "폴더 선택...", IDC_BTN_CATEGORY_BROWSE, 246, 102, 46, 14
+    PUSHBUTTON      "초기화", IDC_BTN_CATEGORY_CLEAR, 296, 102, 26, 14
+    
+    LTEXT           "* 폴더를 비워두면 기본 다운로드 폴더에 저장됩니다. (확장자는 쉼표로 구분)", IDC_STATIC, 20, 122, 300, 24
+    
+    GROUPBOX        "스마트 속도 적응형 가속 설정", IDC_STATIC, 12, 158, 316, 82
+    LTEXT           "시작 연결 분할 수 (1~4):", IDC_STATIC, 20, 172, 110, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_EDT_INITIAL_PARTS, 140, 170, 40, 14, ES_NUMBER | ES_CENTER
+    
+    LTEXT           "최대 가속 분할 한도 (1~12):", IDC_STATIC, 20, 190, 110, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_EDT_MAX_PARTS, 140, 188, 40, 14, ES_NUMBER | ES_CENTER
+
+    CONTROL         "속도 증가 감지 시에만 동적 추가 분할 (스마트 가속)", IDC_CHK_ADAPTIVE_SPLIT, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 208, 230, 10
+    
+    LTEXT           "동시 다운로드 파일 수:", IDC_STATIC, 20, 224, 110, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_EDT_MAX_TASKS, 140, 222, 40, 14, ES_NUMBER | ES_CENTER
+
+    GROUPBOX        "통합 및 시작 옵션", IDC_STATIC, 12, 244, 316, 40
+    CONTROL         "Windows 시작 시 자동 실행", IDC_CHK_AUTO_START, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 256, 130, 10
+    CONTROL         "시스템 트레이로 시작", IDC_CHK_STARTUP_MINIMIZED, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 170, 256, 120, 10
+    
+    DEFPUSHBUTTON   "확인", IDOK, 205, 292, 58, 16
+    PUSHBUTTON      "취소", IDCANCEL, 270, 292, 58, 16
+END
+
+// Download Progress Dialog
+IDD_DOWNLOAD_PROGRESS DIALOGEX 0, 0, 380, 210
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+CAPTION "EasyDownload - 파일 다운로드 진행"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "파일명:", IDC_STATIC, 12, 12, 35, 10, SS_LEFTNOWORDWRAP
+    LTEXT           "", IDC_LBL_PROG_FILENAME, 52, 12, 316, 10, SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS
+    
+    LTEXT           "저장 위치:", IDC_STATIC, 12, 26, 35, 10, SS_LEFTNOWORDWRAP
+    LTEXT           "", IDC_LBL_PROG_SAVETO, 52, 26, 316, 10, SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS
+
+    LTEXT           "URL 출처:", IDC_STATIC, 12, 40, 35, 10, SS_LEFTNOWORDWRAP
+    LTEXT           "", IDC_LBL_PROG_URL, 52, 40, 316, 10, SS_LEFTNOWORDWRAP | SS_ENDELLIPSIS
+    
+    CONTROL         "", IDC_PRG_PROGRESS, "msctls_progress32", PBS_SMOOTH | WS_CHILD | WS_VISIBLE | WS_BORDER, 12, 56, 356, 14
+    CONTROL         "", IDC_SEGMENT_CONTAINER, "Static", SS_NOTIFY | NOT WS_VISIBLE, 12, 74, 356, 26
+    
+    LTEXT           "상태: 연결 중...", IDC_LBL_PROG_STATUS, 12, 106, 180, 10, SS_LEFTNOWORDWRAP
+    LTEXT           "분할: 0개", IDC_LBL_PROG_PARTS, 200, 106, 168, 10, SS_RIGHT
+    
+    LTEXT           "크기: 0 B", IDC_LBL_PROG_SIZE, 12, 120, 180, 10, SS_LEFTNOWORDWRAP
+    LTEXT           "속도: 0 KB/s", IDC_LBL_PROG_SPEED, 200, 120, 168, 10, SS_RIGHT
+    
+    LTEXT           "남은 시간: 계산 중...", IDC_LBL_PROG_TIME, 12, 134, 180, 10, SS_LEFTNOWORDWRAP
+    
+    CONTROL         "다운로드 완료 시 창 자동으로 닫기", IDC_CHK_CLOSE_WHEN_DONE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 12, 154, 200, 10
+    
+    PUSHBUTTON      "파일 열기", IDC_BTN_PROG_OPEN_FILE, 12, 178, 64, 16
+    PUSHBUTTON      "폴더 열기", IDC_BTN_PROG_OPEN_FOLDER, 80, 178, 64, 16
+    
+    PUSHBUTTON      "일시정지", IDC_BTN_PROG_PAUSE, 246, 178, 58, 16
+    DEFPUSHBUTTON   "취소", IDC_BTN_PROG_CANCEL, 308, 178, 60, 16
+END
+
+// Download Info Dialog (Completed Task Properties)
+IDD_DOWNLOAD_INFO DIALOGEX 0, 0, 360, 215
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "다운로드 파일 상세 정보"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "파일 일반 정보", IDC_STATIC, 12, 8, 336, 68
+    LTEXT           "파일명:", IDC_STATIC, 20, 22, 45, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_LBL_INFO_FILENAME, 68, 20, 270, 13, ES_AUTOHSCROLL | ES_READONLY | NOT WS_BORDER
+    
+    LTEXT           "파일 크기:", IDC_STATIC, 20, 38, 45, 10, SS_LEFTNOWORDWRAP
+    LTEXT           "", IDC_LBL_INFO_FILESIZE, 68, 38, 270, 10, SS_LEFTNOWORDWRAP
+    
+    LTEXT           "다운로드 상태:", IDC_STATIC, 20, 54, 45, 10, SS_LEFTNOWORDWRAP
+    LTEXT           "", IDC_LBL_INFO_STATUS, 68, 54, 150, 10, SS_LEFTNOWORDWRAP
+    LTEXT           "", IDC_LBL_INFO_PARTS, 225, 54, 113, 10, SS_RIGHT
+    
+    GROUPBOX        "저장 위치 및 원본 주소", IDC_STATIC, 12, 82, 336, 60
+    LTEXT           "저장 위치:", IDC_STATIC, 20, 96, 45, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_EDT_INFO_SAVEPATH, 68, 94, 270, 14, ES_AUTOHSCROLL | ES_READONLY
+    
+    LTEXT           "출처 URL:", IDC_STATIC, 20, 118, 45, 10, SS_LEFTNOWORDWRAP
+    EDITTEXT        IDC_EDT_INFO_URL, 68, 116, 212, 14, ES_AUTOHSCROLL | ES_READONLY
+    PUSHBUTTON      "주소 복사(&C)", IDC_BTN_INFO_COPY_URL, 284, 116, 54, 14
+    
+    LTEXT           "시작 일시:", IDC_STATIC, 14, 152, 40, 10, SS_LEFTNOWORDWRAP
+    LTEXT           "", IDC_LBL_INFO_CREATED, 56, 152, 120, 10, SS_LEFTNOWORDWRAP
+    
+    LTEXT           "완료 일시:", IDC_STATIC, 184, 152, 40, 10, SS_LEFTNOWORDWRAP
+    LTEXT           "", IDC_LBL_INFO_COMPLETED, 226, 152, 120, 10, SS_LEFTNOWORDWRAP
+    
+    PUSHBUTTON      "파일 열기(&O)", IDC_BTN_INFO_OPEN_FILE, 12, 185, 64, 16
+    PUSHBUTTON      "폴더 열기(&F)", IDC_BTN_INFO_OPEN_FOLDER, 80, 185, 64, 16
+    
+    DEFPUSHBUTTON   "닫기", IDCANCEL, 284, 185, 64, 16
+END
+
+// Version Information
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041204b0"
+        BEGIN
+            VALUE "CompanyName", "EasyDownload Project"
+            VALUE "FileDescription", "EasyDownload - 고속 분할 다운로드 가속기"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "InternalName", "easydownload.exe"
+            VALUE "LegalCopyright", "Copyright (C) 2026. All rights reserved."
+            VALUE "OriginalFilename", "easydownload.exe"
+            VALUE "ProductName", "EasyDownload"
+            VALUE "ProductVersion", "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0412, 1200
+    END
+END

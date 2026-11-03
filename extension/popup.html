@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>EasyDownload</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #0f172a;
+      color: #f1f5f9;
+      font-size: 13px;
+      user-select: none;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 14px;
+      color: #38bdf8;
+    }
+    .brand svg { width: 18px; height: 18px; }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .status-badge.offline {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .section-title {
+      padding: 10px 14px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .video-list {
+      max-height: 250px;
+      overflow-y: auto;
+      padding: 0 10px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .video-card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .video-card:hover {
+      border-color: #38bdf8;
+      background: #243248;
+    }
+    .video-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .video-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #f8fafc;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 4px;
+    }
+    .video-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: #94a3b8;
+    }
+    .badge-quality {
+      background: #0284c7;
+      color: #ffffff;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .btn-download {
+      background: #0284c7;
+      color: #ffffff;
+      border: none;
+      border-radius: 6px;
+      padding: 7px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    .btn-download:hover {
+      background: #0369a1;
+    }
+    .empty-state {
+      padding: 24px 14px;
+      text-align: center;
+      color: #94a3b8;
+    }
+    .empty-state svg {
+      width: 36px;
+      height: 36px;
+      margin-bottom: 8px;
+      color: #64748b;
+    }
+    .empty-text {
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .manual-box {
+      padding: 10px 14px;
+      background: #1e293b;
+      border-top: 1px solid #334155;
+    }
+    .manual-box label {
+      display: block;
+      font-size: 11px;
+      color: #94a3b8;
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+    .input-row {
+      display: flex;
+      gap: 6px;
+    }
+    .input-url {
+      flex: 1;
+      background: #0f172a;
+      border: 1px solid #334155;
+      color: #f1f5f9;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      outline: none;
+    }
+    .input-url:focus {
+      border-color: #38bdf8;
+    }
+    .btn-manual-dl {
+      background: #334155;
+      color: #f1f5f9;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background 0.15s;
+    }
+    .btn-manual-dl:hover {
+      background: #0284c7;
+    }
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      background: #0f172a;
+      border-top: 1px solid #1e293b;
+      font-size: 11px;
+      color: #64748b;
+    }
+    .switch-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      color: #94a3b8;
+    }
+    .switch-label input {
+      accent-color: #0284c7;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="7 10 12 15 17 10"></polyline>
+        <line x1="12" y1="15" x2="12" y2="3"></line>
+      </svg>
+      <span>EasyDownload</span>
+    </div>
+    <div id="appStatus" class="status-badge">
+      <div class="status-dot"></div>
+      <span id="appStatusText">프로그램 연결됨</span>
+    </div>
+  </div>
+
+  <div class="section-title">감지된 비디오 스트림</div>
+  <div id="videoList" class="video-list">
+    <div class="empty-state">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+        <line x1="7" y1="2" x2="7" y2="22"></line>
+        <line x1="17" y1="2" x2="17" y2="22"></line>
+        <line x1="2" y1="12" x2="22" y2="12"></line>
+        <line x1="2" y1="7" x2="7" y2="7"></line>
+        <line x1="2" y1="17" x2="7" y2="17"></line>
+        <line x1="17" y1="17" x2="22" y2="17"></line>
+        <line x1="17" y1="7" x2="22" y2="7"></line>
+      </svg>
+      <div class="empty-text">
+        현재 탭에서 감지된 비디오가 없습니다.<br>
+        동영상을 재생(▶)하면 스트림이 자동 감지됩니다.
+      </div>
+    </div>
+  </div>
+
+  <div class="manual-box">
+    <label for="inputUrl">직접 다운로드 주소 입력</label>
+    <div class="input-row">
+      <input type="text" id="inputUrl" class="input-url" placeholder="https://..." />
+      <button id="btnManualDl" class="btn-manual-dl">다운로드</button>
+    </div>
+  </div>
+
+  <div class="footer">
+    <label class="switch-label">
+      <input type="checkbox" id="chkIntercept" checked />
+      <span>브라우저 다운로드 자동 가속</span>
+    </label>
+    <span>v1.0.0</span>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
+

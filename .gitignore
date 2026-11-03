@@ -1,0 +1,33 @@
+# Build outputs
+bin/
+obj/
+*.exe
+*.dll
+*.pdb
+*.zip
+*.7z
+
+# Visual Studio files
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.opendb
+*.ipch
+
+# Build logs and temp files
+*.obj
+*.iobj
+*.ipdb
+*.tlog
+*.lastbuildstate
+*.idb
+*.res
+*.log
+
+# Windows files
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/

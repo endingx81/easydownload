@@ -1,0 +1,20 @@
+#pragma once
+#include <windows.h>
+#include <memory>
+#include <string>
+
+namespace EasyDownload {
+
+class DownloadTask;
+
+class DownloadProgressDialog {
+public:
+    static HWND Show(HWND hParent, std::shared_ptr<DownloadTask> task);
+    static void CloseAll();
+
+private:
+    static INT_PTR CALLBACK DialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+};
+
+} // namespace EasyDownload
+

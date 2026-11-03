@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "EasyDownload - 고속 분할 다운로드 및 비디오 가속기",
+  "version": "1.0.0",
+  "description": "Chrome의 모든 다운로드를 EasyDownload 가속기로 자동 연결하고 웹 상의 모든 비디오/M3U8 스트림을 실시간 감지하여 고속 다운로드합니다.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "downloads",
+    "webRequest",
+    "cookies",
+    "tabs",
+    "activeTab",
+    "storage",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_popup": "popup.html",
+    "default_title": "EasyDownload - 동영상 감지 및 가속"
+  }
+}
+
