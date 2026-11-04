@@ -6,6 +6,7 @@
 #include "core/Settings.h"
 #include "core/DownloadManager.h"
 #include "core/LocalServer.h"
+#include "core/DpiBypassManager.h"
 #include "ui/MainWindow.h"
 
 #pragma comment(lib, "comctl32.lib")
@@ -80,6 +81,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     }
 
     // 8. Cleanup
+    EasyDownload::DpiBypassManager::Instance().Stop();
     EasyDownload::LocalServer::Instance().Stop();
     EasyDownload::DownloadManager::Instance().Shutdown();
     CoUninitialize();

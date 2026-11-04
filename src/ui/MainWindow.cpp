@@ -11,6 +11,8 @@
 #include "../core/HttpEngine.h"
 #include "../core/LocalServer.h"
 #include "../core/Settings.h"
+#include "../core/DpiBypassManager.h"
+#include "../core/HlsDownloader.h"
 #include <shlwapi.h>
 #include <shellapi.h>
 #include <sstream>
@@ -33,6 +35,7 @@ MainWindow& MainWindow::Instance() {
 MainWindow::MainWindow() {}
 
 MainWindow::~MainWindow() {
+    DpiBypassManager::Instance().Stop();
     RemoveTrayIcon();
     if (m_hFont) DeleteObject(m_hFont);
     if (m_hBoldFont) DeleteObject(m_hBoldFont);
@@ -57,7 +60,7 @@ bool MainWindow::Create() {
     m_hWnd = CreateWindowExW(
         WS_EX_WINDOWEDGE,
         MAIN_CLASS,
-        L"EasyDownload - 고속 분할 다운로드 가속기",
+        L"EasyDownload",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
         initW, initH,
@@ -92,6 +95,20 @@ bool MainWindow::Create() {
 
     // Start 250ms update timer
     SetTimer(m_hWnd, ID_TIMER_UPDATE, 250, NULL);
+
+    // Auto start GoodbyeDPI bypass if enabled (default: true)
+    if (Settings::Instance().GetDpiBypassEnabled()) {
+        DpiBypassManager::Instance().Start(Settings::Instance().GetDpiBypassMode());
+    }
+    UpdateDpiBypassUi();
+
+    // Auto update yt-dlp in background on application startup
+    HlsDownloader::UpdateYtDlpInBackground();
+
+    // Ensure Task Scheduler auto-start is registered with highest privileges if enabled
+    if (Settings::Instance().GetAutoStartWithWindows()) {
+        Settings::Instance().SetAutoStartWithWindows(true);
+    }
 
     RefreshTasksList();
     return true;
@@ -138,8 +155,8 @@ void MainWindow::InitControls() {
         { I_IMAGENONE, ID_TASK_NEW, TBSTATE_ENABLED, BTNS_BUTTON | BTNS_AUTOSIZE, {0}, 0, (INT_PTR)L"➕ 새 다운로드" },
         { I_IMAGENONE, ID_TASK_NEW_VIDEO, TBSTATE_ENABLED, BTNS_BUTTON | BTNS_AUTOSIZE, {0}, 0, (INT_PTR)L"🎬 비디오 다운로드" },
         { 0, 0, 0, BTNS_SEP, {0}, 0, 0 },
-        { I_IMAGENONE, ID_TASK_START, TBSTATE_ENABLED, BTNS_BUTTON | BTNS_AUTOSIZE, {0}, 0, (INT_PTR)L"▶ 시작" },
-        { I_IMAGENONE, ID_TASK_PAUSE, TBSTATE_ENABLED, BTNS_BUTTON | BTNS_AUTOSIZE, {0}, 0, (INT_PTR)L"⏸ 일시정지" },
+        { I_IMAGENONE, ID_TASK_START, TBSTATE_ENABLED, BTNS_BUTTON | BTNS_AUTOSIZE, {0}, 0, (INT_PTR)L"▶ 시작 / 재시작" },
+        { I_IMAGENONE, ID_TASK_PAUSE, TBSTATE_ENABLED, BTNS_BUTTON | BTNS_AUTOSIZE, {0}, 0, (INT_PTR)L"⏸ 중단" },
         { I_IMAGENONE, ID_TASK_DELETE, TBSTATE_ENABLED, BTNS_BUTTON | BTNS_AUTOSIZE, {0}, 0, (INT_PTR)L"🗑 삭제" },
         { 0, 0, 0, BTNS_SEP, {0}, 0, 0 },
         { I_IMAGENONE, ID_TASK_OPEN_FOLDER, TBSTATE_ENABLED, BTNS_BUTTON | BTNS_AUTOSIZE, {0}, 0, (INT_PTR)L"📁 폴더 열기" },
@@ -195,8 +212,8 @@ void MainWindow::InitControls() {
     );
     SendMessage(m_hStatusBar, WM_SETFONT, (WPARAM)m_hFont, TRUE);
 
-    int parts[] = { 300, 550, -1 };
-    SendMessage(m_hStatusBar, SB_SETPARTS, 3, (LPARAM)parts);
+    int parts[] = { 260, 440, 680, -1 };
+    SendMessage(m_hStatusBar, SB_SETPARTS, 4, (LPARAM)parts);
 }
 
 void MainWindow::Relayout(int width, int height) {
@@ -313,6 +330,7 @@ void MainWindow::UpdateTasksRealtime() {
     SendMessageW(m_hStatusBar, SB_SETTEXTW, 0, (LPARAM)part0.c_str());
     SendMessageW(m_hStatusBar, SB_SETTEXTW, 1, (LPARAM)part1.c_str());
     SendMessageW(m_hStatusBar, SB_SETTEXTW, 2, (LPARAM)part2.c_str());
+    SendMessageW(m_hStatusBar, SB_SETTEXTW, 3, (LPARAM)DpiBypassManager::Instance().GetStatusString().c_str());
 
     UpdateSegmentBar();
 }
@@ -345,7 +363,7 @@ void MainWindow::InitTrayIcon() {
     m_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     m_nid.uCallbackMessage = WM_TRAY_NOTIFY;
     m_nid.hIcon = LoadIconW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDI_APP_ICON));
-    wcscpy_s(m_nid.szTip, _countof(m_nid.szTip), L"EasyDownload - 가속기");
+    wcscpy_s(m_nid.szTip, _countof(m_nid.szTip), L"EasyDownload");
 
     Shell_NotifyIconW(NIM_ADD, &m_nid);
     m_trayActive = true;
@@ -537,6 +555,41 @@ void MainWindow::OnInstallExtension() {
     }
 }
 
+void MainWindow::OnToggleDpiBypass() {
+    DpiBypassManager::Instance().Toggle();
+    UpdateDpiBypassUi();
+}
+
+void MainWindow::UpdateDpiBypassUi() {
+    SendMessageW(m_hStatusBar, SB_SETTEXTW, 3, (LPARAM)DpiBypassManager::Instance().GetStatusString().c_str());
+}
+
+void MainWindow::OnToggleChromeDoh() {
+    bool current = DpiBypassManager::IsChromeDohConfigured();
+    bool next = !current;
+    if (DpiBypassManager::SetChromeDohEnabled(next)) {
+        HMENU hMenu = GetMenu(m_hWnd);
+        if (hMenu) {
+            CheckMenuItem(hMenu, ID_CHROME_DOH_TOGGLE, MF_BYCOMMAND | (next ? MF_CHECKED : MF_UNCHECKED));
+        }
+
+        if (next) {
+            MessageBoxW(m_hWnd,
+                L"Chrome 보안 DNS (Cloudflare 1.1.1.1 DoH)가 활성화되었습니다.\n\n"
+                L"통신사 DNS 차단이 우회되어 웹사이트 접속 지연 및 새로고침 문제가 해결됩니다.\n\n"
+                L"* Chrome 브라우저를 완전히 닫고 다시 실행하면 즉시 적용됩니다.",
+                L"보안 DNS 적용 완료", MB_OK | MB_ICONINFORMATION);
+        } else {
+            MessageBoxW(m_hWnd,
+                L"Chrome 보안 DNS 설정이 해제되어 기본값으로 복원되었습니다.\n\n"
+                L"* Chrome 브라우저를 완전히 닫고 다시 실행하면 원래대로 복구됩니다.",
+                L"보안 DNS 복원 완료", MB_OK | MB_ICONINFORMATION);
+        }
+    } else {
+        MessageBoxW(m_hWnd, L"레지스트리 설정 변경에 실패했습니다. 관리자 권한을 확인해 주세요.", L"오류", MB_OK | MB_ICONERROR);
+    }
+}
+
 LRESULT CALLBACK MainWindow::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     MainWindow* pThis = nullptr;
     if (uMsg == WM_CREATE) {
@@ -595,6 +648,8 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         case ID_TASK_SHOW_INFO: OnShowSelectedInfo(); break;
         case ID_TASK_SETTINGS: OnSettings(); break;
         case ID_EXTENSION_INSTALL: OnInstallExtension(); break;
+        case ID_DPI_BYPASS_TOGGLE: OnToggleDpiBypass(); break;
+        case ID_CHROME_DOH_TOGGLE: OnToggleChromeDoh(); break;
         case ID_APP_EXIT: DestroyWindow(m_hWnd); break;
         case ID_TRAY_SHOW:
             ShowWindow(m_hWnd, SW_RESTORE);
@@ -604,7 +659,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             DestroyWindow(m_hWnd);
             break;
         case ID_ABOUT:
-            MessageBoxW(m_hWnd, L"EasyDownload v1.0.0\n\n초고속 멀티스레드 분할 다운로드 가속기\n크롬 확장 연동 및 비디오 스트림 다운로더",
+            MessageBoxW(m_hWnd, L"EasyDownload v1.3.9\n\n초고속 멀티스레드 분할 다운로드 가속기\n크롬 확장 연동 및 비디오 스트림 다운로더\nYouTube / M3U8 고화질 자동 병합 다운로더\nChrome 보안 DNS(DoH) & DPI 차단 우회 내장",
                 L"EasyDownload 정보", MB_OK | MB_ICONINFORMATION);
             break;
         }
@@ -649,6 +704,10 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                     }
 
                     HMENU hMenu = CreatePopupMenu();
+                    AppendMenuW(hMenu, MF_STRING, ID_TASK_START, L"시작 / 재시작(&S)");
+                    AppendMenuW(hMenu, MF_STRING, ID_TASK_PAUSE, L"다운로드 중단(&P)");
+                    AppendMenuW(hMenu, MF_STRING, ID_TASK_DELETE, L"삭제(&D)");
+                    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                     AppendMenuW(hMenu, MF_STRING, ID_TASK_OPEN_FILE, L"열기(&O)");
                     AppendMenuW(hMenu, MF_STRING, ID_TASK_OPEN_FOLDER, L"폴더 열기(&F)");
                     AppendMenuW(hMenu, MF_STRING, ID_TASK_COPY_URL, L"다운로드 주소 복사(&C)");
@@ -669,16 +728,53 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             // Bring client window to foreground over browser
             ForceForegroundWindow(m_hWnd);
 
-            std::wstring fname = req->filename;
-            if (fname.empty()) {
-                fname = HttpEngine::ExtractFilenameFromUrl(req->url);
+            std::wstring fname = HttpEngine::SanitizeFilename(req->filename, 50);
+            bool isYouTube = (req->url.find(L"youtube.com/") != std::wstring::npos || req->url.find(L"youtu.be/") != std::wstring::npos);
+            bool isHls = (req->url.find(L".m3u8") != std::wstring::npos) || req->isVideo || isYouTube;
+
+            if (isYouTube) {
+                if (fname.empty() || fname == L"download_file" || fname == L".mp4" || HttpEngine::IsGenericFilename(fname)) {
+                    fname = L"youtube_video.mp4";
+                }
+                if (fname.rfind(L".mp4") == std::wstring::npos) {
+                    fname += L".mp4";
+                }
+            } else if (isHls) {
+                // Video stream title resolution
+                if (fname.empty() || fname == L"download_file" || fname == L".mp4" || HttpEngine::IsGenericFilename(fname)) {
+                    std::wstring refTitle = HttpEngine::ExtractTitleFromRefererUrl(req->referer);
+                    if (!refTitle.empty()) {
+                        fname = HttpEngine::SanitizeFilename(refTitle, 50);
+                    }
+                }
+                if (fname.empty()) {
+                    fname = HttpEngine::ExtractFilenameFromUrl(req->url);
+                }
+                if (fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
+                    fname = fname.substr(0, fname.length() - 5);
+                }
+                if (fname.rfind(L".mp4") == std::wstring::npos && fname.rfind(L".ts") == std::wstring::npos) {
+                    fname += L".mp4";
+                }
+            } else {
+                // Regular file download: NEVER use ExtractTitleFromRefererUrl (avoids _video suffix on normal files!)
+                if (fname.empty() || fname == L"download_file" || HttpEngine::IsGenericFilename(fname)) {
+                    fname = HttpEngine::ExtractFilenameFromUrl(req->url);
+                }
+                if (fname.empty()) {
+                    fname = L"download.bin";
+                }
             }
+
             std::wstring baseDir = Settings::Instance().GetTargetFolderForFilename(fname);
             WCHAR combined[MAX_PATH] = { 0 };
             PathCombineW(combined, baseDir.c_str(), fname.c_str());
 
             // Auto add task from Chrome with resolved category path!
             auto task = DownloadManager::Instance().AddTask(req->url, combined, req->referer, req->cookies, 8, true);
+            if (task && isYouTube) {
+                task->SetIsYouTube(true);
+            }
             RefreshTasksList();
             if (task) {
                 DownloadProgressDialog::Show(m_hWnd, task);
@@ -693,15 +789,35 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             // Bring client window to foreground over browser
             ForceForegroundWindow(m_hWnd);
 
-            std::wstring fname = HttpEngine::SanitizeFilename(info->title);
+            // Title provided directly from UI download list (max 50 chars for base title)
+            std::wstring fname = HttpEngine::SanitizeFilename(info->title, 50);
+            bool isHls = (info->videoUrl.find(L".m3u8") != std::wstring::npos);
+
+            // Only fallback if title is completely empty or default placeholder
+            if (fname.empty() || fname == L"download_file" || fname == L".mp4" || HttpEngine::IsGenericFilename(fname)) {
+                std::wstring pageOrRef = !info->pageUrl.empty() ? info->pageUrl : info->referer;
+                std::wstring refTitle = HttpEngine::ExtractTitleFromRefererUrl(pageOrRef);
+                if (!refTitle.empty()) {
+                    fname = HttpEngine::SanitizeFilename(refTitle, 50);
+                }
+            }
+
             if (fname.empty()) {
                 fname = HttpEngine::ExtractFilenameFromUrl(info->videoUrl);
             }
             if (fname.empty()) {
                 fname = L"video_stream";
             }
-            if (fname.rfind(L".ts") == std::wstring::npos && fname.rfind(L".mp4") == std::wstring::npos) {
-                fname += (info->videoUrl.find(L".m3u8") != std::wstring::npos) ? L".ts" : L".mp4";
+
+            // Strip .m3u8 if present
+            if (fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
+                fname = fname.substr(0, fname.length() - 5);
+            }
+
+            // Ensure standard playable video extension (.mp4 preferred for all video streams)
+            if (fname.rfind(L".mp4") == std::wstring::npos && fname.rfind(L".ts") == std::wstring::npos &&
+                fname.rfind(L".mkv") == std::wstring::npos && fname.rfind(L".webm") == std::wstring::npos) {
+                fname += L".mp4";
             }
 
             std::wstring baseDir = Settings::Instance().GetTargetFolderForFilename(fname);
@@ -726,6 +842,10 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             HMENU hMenu = LoadMenuW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDR_TRAY_MENU));
             if (hMenu) {
                 HMENU hSub = GetSubMenu(hMenu, 0);
+                bool running = DpiBypassManager::Instance().IsRunning();
+                CheckMenuItem(hSub, ID_DPI_BYPASS_TOGGLE, MF_BYCOMMAND | (running ? MF_CHECKED : MF_UNCHECKED));
+                bool dohOn = DpiBypassManager::IsChromeDohConfigured();
+                CheckMenuItem(hSub, ID_CHROME_DOH_TOGGLE, MF_BYCOMMAND | (dohOn ? MF_CHECKED : MF_UNCHECKED));
                 POINT pt;
                 GetCursorPos(&pt);
                 SetForegroundWindow(m_hWnd);
@@ -741,6 +861,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     }
     case WM_DESTROY: {
         KillTimer(m_hWnd, ID_TIMER_UPDATE);
+        DpiBypassManager::Instance().Stop();
         PostQuitMessage(0);
         return 0;
     }

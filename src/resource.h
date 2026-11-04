@@ -24,6 +24,8 @@
 #define ID_TRAY_EXIT                    1013
 #define ID_TASK_COPY_URL                1014
 #define ID_TASK_SHOW_INFO               1015
+#define ID_DPI_BYPASS_TOGGLE            1016
+#define ID_CHROME_DOH_TOGGLE            1017
 
 // Dialogs
 #define IDD_NEW_DOWNLOAD                2001
@@ -69,6 +71,36 @@
 #define IDC_EDT_CATEGORY_DIR            3213
 #define IDC_BTN_CATEGORY_BROWSE         3214
 #define IDC_BTN_CATEGORY_CLEAR          3215
+#define IDC_CHK_DPI_AUTO_START          3216
+#define IDC_CMB_DPI_MODE                3217
+#define IDC_LBL_CHROME_DOH_STATUS       3218
+#define IDC_BTN_CHROME_DOH_TOGGLE       3219
+#define IDC_TAB_SETTINGS                3220
+#define IDC_CMB_INTERNET_SPEED          3222
+
+// Settings Tab Static & Groupbox Controls
+#define IDC_GRP_TAB0_1                  3230
+#define IDC_GRP_TAB0_2                  3231
+#define IDC_LBL_TAB0_DESC               3232
+
+#define IDC_GRP_TAB1_1                  3240
+#define IDC_LBL_TAB1_CAT                3241
+#define IDC_LBL_TAB1_EXT                3242
+#define IDC_LBL_TAB1_DIR                3243
+#define IDC_LBL_TAB1_DESC               3244
+
+#define IDC_GRP_TAB2_1                  3250
+#define IDC_LBL_TAB2_SPEED              3251
+#define IDC_LBL_TAB2_INIT               3252
+#define IDC_LBL_TAB2_MAX                3253
+#define IDC_LBL_TAB2_TASKS              3254
+#define IDC_LBL_TAB2_DESC               3255
+
+#define IDC_GRP_TAB3_1                  3260
+#define IDC_LBL_TAB3_MODE               3261
+#define IDC_LBL_TAB3_DESC1              3262
+#define IDC_GRP_TAB3_2                  3263
+#define IDC_LBL_TAB3_DESC2              3264
 
 // Dialog Controls - Download Progress
 #define IDC_LBL_PROG_FILENAME           3301

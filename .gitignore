@@ -1,8 +1,14 @@
+# Test outputs
+tests/
+test_*.txt
+test_*.mp4
+
 # Build outputs
 bin/
 obj/
 *.exe
 *.dll
+!tools/windivert/WinDivert.dll
 *.pdb
 *.zip
 *.7z
@@ -31,3 +37,4 @@ obj/
 Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+

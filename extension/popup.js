@@ -31,7 +31,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 4. Request detected videos for this tab
   chrome.runtime.sendMessage({ action: "getVideos", tabId: activeTab.id }, (res) => {
-    const list = (res && Array.isArray(res.videos)) ? res.videos : [];
+    let list = (res && Array.isArray(res.videos)) ? [...res.videos] : [];
+    if (activeTab.url && (activeTab.url.includes("youtube.com/watch") || activeTab.url.includes("youtu.be/") || activeTab.url.includes("youtube.com/shorts/"))) {
+      if (!list.some(v => v.url === activeTab.url)) {
+        let ytTitle = activeTab.title ? activeTab.title.replace(/\s*-\s*YouTube\s*$/i, "").trim() : "YouTube 동영상";
+        list.unshift({
+          url: activeTab.url,
+          title: ytTitle,
+          type: "YouTube 최고 화질 (1080p/4K)",
+          quality: "YouTube",
+          size: "최고 화질"
+        });
+      }
+    }
     renderVideos(list, activeTab);
   });
 
@@ -46,9 +58,31 @@ document.addEventListener("DOMContentLoaded", async () => {
       const infoDiv = document.createElement("div");
       infoDiv.className = "video-info";
 
+      let displayTitle = v.title || tab.title || "웹_동영상";
+      if (/^(index|master|playlist|chunklist|video|stream|웹 비디오|동영상 스트림)/i.test(displayTitle)) {
+        displayTitle = (tab.title ? tab.title.trim() : "") || displayTitle;
+      }
+
+      // Separate quality suffix if present
+      let qSuffix = "";
+      const qMatch = displayTitle.match(/(\s*\[[^\]]+\])/);
+      if (qMatch) {
+        qSuffix = qMatch[1];
+        displayTitle = displayTitle.replace(qMatch[1], "").trim();
+      }
+
+      // Strip site suffix, clean forbidden chars, and limit to 50 chars
+      displayTitle = displayTitle.replace(/\s*[-|_|–—]\s*(SupJav|JavDB|MissAV|YouTube|FC2|Dailymotion|Vimeo|Twitch|Bilibili|XVIDEOS|Pornhub|SpankBang)\s*$/i, "");
+      displayTitle = displayTitle.replace(/\.(html?|m3u8|mp4|ts|mkv|webm)$/i, "");
+      displayTitle = displayTitle.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim();
+      if (displayTitle.length > 50) {
+        displayTitle = displayTitle.substring(0, 50).trim();
+      }
+      displayTitle = `${displayTitle}${qSuffix}.mp4`;
+
       const titleDiv = document.createElement("div");
       titleDiv.className = "video-title";
-      titleDiv.textContent = v.title || tab.title || "웹 비디오 스트림";
+      titleDiv.textContent = displayTitle;
       titleDiv.title = titleDiv.textContent;
 
       const metaDiv = document.createElement("div");
@@ -84,8 +118,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         chrome.runtime.sendMessage({
           action: "downloadVideo",
           videoUrl: v.url,
-          title: v.title || tab.title || "video_download",
+          title: displayTitle,
           pageUrl: tab.url || "",
+          referer: tab.url || "",
           type: v.type || "video"
         }, (resp) => {
           if (resp && resp.success) {

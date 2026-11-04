@@ -27,6 +27,12 @@
     <ClInclude Include="src\core\DownloadTask.h">
       <Filter>Core</Filter>
     </ClInclude>
+    <ClInclude Include="src\core\DpiBypassManager.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\windivert.h">
+      <Filter>Core</Filter>
+    </ClInclude>
     <ClInclude Include="src\core\HlsDownloader.h">
       <Filter>Core</Filter>
     </ClInclude>
@@ -43,6 +49,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\DownloadProgressDialog.h">
+      <Filter>UI</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\DownloadInfoDialog.h">
       <Filter>UI</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\FormatUtils.h">
@@ -69,6 +78,9 @@
       <Filter>Core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\DownloadTask.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\DpiBypassManager.cpp">
       <Filter>Core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\HlsDownloader.cpp">

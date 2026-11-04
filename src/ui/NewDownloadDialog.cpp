@@ -65,6 +65,14 @@ static void UpdateSavePathFromUrl(HWND hDlg) {
 
     if (!url.empty()) {
         std::wstring fname = HttpEngine::ExtractFilenameFromUrl(url);
+        bool isYouTube = (url.find(L"youtube.com/") != std::wstring::npos || url.find(L"youtu.be/") != std::wstring::npos);
+        if (isYouTube) {
+            fname = L"youtube_video.mp4";
+        }
+        bool isHls = (url.find(L".m3u8") != std::wstring::npos);
+        if (isHls && fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
+            fname = fname.substr(0, fname.length() - 5) + L".mp4";
+        }
         std::wstring dir = Settings::Instance().GetTargetFolderForFilename(fname);
         WCHAR combined[MAX_PATH] = { 0 };
         PathCombineW(combined, dir.c_str(), fname.c_str());
@@ -91,6 +99,14 @@ INT_PTR CALLBACK NewDownloadDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM wPar
         if (!ctx->initUrl.empty()) {
             SetDlgItemTextW(hDlg, IDC_EDT_URL, ctx->initUrl.c_str());
             std::wstring fname = ctx->initFilename.empty() ? HttpEngine::ExtractFilenameFromUrl(ctx->initUrl) : ctx->initFilename;
+            bool isYouTube = (ctx->initUrl.find(L"youtube.com/") != std::wstring::npos || ctx->initUrl.find(L"youtu.be/") != std::wstring::npos);
+            if (isYouTube && (fname.empty() || fname == L"watch")) {
+                fname = L"youtube_video.mp4";
+            }
+            bool isHls = (ctx->initUrl.find(L".m3u8") != std::wstring::npos);
+            if (isHls && fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
+                fname = fname.substr(0, fname.length() - 5) + L".mp4";
+            }
             std::wstring dir = Settings::Instance().GetTargetFolderForFilename(fname);
             WCHAR combined[MAX_PATH] = { 0 };
             PathCombineW(combined, dir.c_str(), fname.c_str());

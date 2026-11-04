@@ -13,6 +13,91 @@ function formatBytes(bytes) {
   return bytes + " B";
 }
 
+function cleanPageTitle(rawTitle, maxLen = 50) {
+  if (!rawTitle || typeof rawTitle !== "string") return "";
+  let title = rawTitle.trim();
+  // Strip trailing extension if any (.html, .m3u8, .mp4, .ts)
+  title = title.replace(/\.(html?|m3u8|mp4|ts|mkv|webm)$/i, "");
+  // Strip site branding suffixes only at the end (e.g. " - SupJav", " | YouTube")
+  title = title.replace(/\s*[-|_|–—]\s*(SupJav|JavDB|MissAV|YouTube|FC2|Dailymotion|Vimeo|Twitch|Bilibili|XVIDEOS|Pornhub|SpankBang)\s*$/i, "");
+  // Replace illegal filename characters
+  title = title.replace(/[\\/:*?"<>|]/g, "_");
+  // Collapse whitespace
+  title = title.replace(/\s+/g, " ").trim();
+  // Limit title length to maxLen (default 50)
+  if (title.length > maxLen) {
+    title = title.substring(0, maxLen).trim();
+  }
+  return title;
+}
+
+function isGenericStreamTitle(title) {
+  if (!title || typeof title !== "string") return true;
+  let t = title.trim().toLowerCase();
+  t = t.replace(/\[[^\]]*\]/g, "").trim();
+  t = t.replace(/\.(m3u8|mp4|ts)$/i, "").trim();
+  if (!t) return true;
+  const genericList = [
+    "웹 비디오", "웹 동영상", "동영상 스트림", "video", "video_stream",
+    "video_download", "stream", "player", "embed", "index", "master",
+    "playlist", "chunklist", "download_file", "동영상", "download"
+  ];
+  if (genericList.includes(t)) return true;
+  if (/^(index|master|playlist|chunklist|stream|seg|segment)[-_0-9a-z]*/i.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+function extractSlugFromUrl(urlStr) {
+  if (!urlStr) return "";
+  try {
+    const u = new URL(urlStr);
+    let host = u.hostname.replace(/^www\./, "");
+    let siteName = host.split(".")[0];
+    let pathname = u.pathname.replace(/\/$/, "");
+    let lastSegment = pathname.split("/").pop() || "";
+    lastSegment = lastSegment.replace(/\.(html?|php|jsp|asp|aspx)$/i, "");
+    if (lastSegment && !/^(index|watch|video|play)$/i.test(lastSegment)) {
+      return `${siteName}_${lastSegment}`.replace(/[\\/:*?"<>|]/g, "_");
+    }
+    return siteName ? `${siteName}_video` : "";
+  } catch (e) {
+    return "";
+  }
+}
+
+async function getBestTitleForTab(tabId, fallbackTitle, streamUrl) {
+  let title = "";
+  let tabUrl = "";
+  if (tabId && tabId > 0) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab) {
+        if (tab.title) title = cleanPageTitle(tab.title);
+        if (tab.url) tabUrl = tab.url;
+      }
+    } catch (e) {}
+  }
+  if (!title || isGenericStreamTitle(title)) {
+    if (fallbackTitle && !isGenericStreamTitle(fallbackTitle)) {
+      title = cleanPageTitle(fallbackTitle);
+    }
+  }
+  if (!title || isGenericStreamTitle(title)) {
+    const slug = extractSlugFromUrl(tabUrl);
+    if (slug) title = slug;
+  }
+  if (!title && streamUrl) {
+    const slug = extractSlugFromUrl(streamUrl);
+    if (slug && !isGenericStreamTitle(slug)) title = slug;
+  }
+  if (!title) {
+    title = "웹_동영상";
+  }
+  return title;
+}
+
 // Initialize settings
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.set({
@@ -31,15 +116,15 @@ chrome.runtime.onInstalled.addListener(() => {
 // Check if desktop app is running
 async function isAppRunning() {
   try {
-    const res = await fetch(`${BRIDGE_URL}/ping`, { method: "GET" });
+    const res = await fetch(`${BRIDGE_URL}/ping`, { method: "GET", signal: AbortSignal.timeout(1000) });
     return res.ok;
   } catch (e) {
     return false;
   }
 }
 
-// Intercept all Chrome Downloads
-chrome.downloads.onCreated.addListener(async (item) => {
+// Intercept Chrome Downloads accurately using onDeterminingFilename
+async function handleDownloadIntercept(item) {
   const settings = await chrome.storage.local.get(["interceptDownloads"]);
   if (settings.interceptDownloads === false) return;
 
@@ -47,12 +132,12 @@ chrome.downloads.onCreated.addListener(async (item) => {
   if (item.byExtensionId) return;
 
   // Only handle http / https
-  if (!item.url || (!item.url.startsWith("http://") && !item.url.startsWith("https://"))) {
+  const targetUrl = item.finalUrl || item.url;
+  if (!targetUrl || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
     return;
   }
 
   // Deduplicate: ignore if same url intercepted within 5s
-  const targetUrl = item.finalUrl || item.url;
   const now = Date.now();
   if (recentDownloads.has(targetUrl) && (now - recentDownloads.get(targetUrl) < 5000)) {
     return;
@@ -113,15 +198,42 @@ chrome.downloads.onCreated.addListener(async (item) => {
     } catch (e) {}
   }
 
+  let resolvedFilename = item.filename ? item.filename.split(/[\\/]/).pop() : "";
+
+  // Detect M3U8 video stream and resolve proper filename and extension (.mp4)
+  const isM3u8 = targetUrl.toLowerCase().includes(".m3u8") ||
+                 (resolvedFilename && resolvedFilename.toLowerCase().endsWith(".m3u8"));
+
+  if (isM3u8) {
+    let topTitle = "";
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTab && activeTab.title) {
+        topTitle = cleanPageTitle(activeTab.title, 50);
+      }
+    } catch (e) {}
+
+    if ((!resolvedFilename || isGenericStreamTitle(resolvedFilename)) && topTitle) {
+      resolvedFilename = topTitle;
+    }
+
+    if (resolvedFilename.toLowerCase().endsWith(".m3u8")) {
+      resolvedFilename = resolvedFilename.substring(0, resolvedFilename.length - 5);
+    }
+    if (!resolvedFilename.toLowerCase().endsWith(".mp4") && !resolvedFilename.toLowerCase().endsWith(".ts")) {
+      resolvedFilename += ".mp4";
+    }
+  }
+
   // Forward to EasyDownload desktop core
   try {
     const payload = {
       url: targetUrl,
-      filename: item.filename ? item.filename.split(/[\\/]/).pop() : "",
+      filename: resolvedFilename,
       referer: referer,
       cookies: cookiesStr,
       userAgent: navigator.userAgent,
-      isVideo: false
+      isVideo: isM3u8
     };
 
     await fetch(`${BRIDGE_URL}/download`, {
@@ -129,10 +241,28 @@ chrome.downloads.onCreated.addListener(async (item) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    console.log("[EasyDownload] Download forwarded successfully:", payload.url);
+    console.log("[EasyDownload] Download forwarded successfully:", payload.url, "Filename:", payload.filename);
   } catch (err) {
     console.error("[EasyDownload] Forward failed:", err);
   }
+}
+
+chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  // 1. Immediately invoke suggest synchronously so Chrome's 60-second wait is ELIMINATED!
+  if (typeof suggest === "function") {
+    try {
+      if (item.filename) {
+        suggest({ filename: item.filename, conflictAction: "uniquify" });
+      } else {
+        suggest();
+      }
+    } catch (e) {
+      console.warn("[EasyDownload] suggest error:", e);
+    }
+  }
+
+  // 2. Intercept and forward download immediately to desktop core
+  handleDownloadIntercept(item);
 });
 
 // Parse M3U8 Master Playlist into multiple quality choices (1080p, 720p, etc.)
@@ -186,13 +316,15 @@ async function parseM3u8Variants(url, baseTitle, tabId, refererUrl) {
 
         if (variantUrl) {
           if (!firstVariantUrl) firstVariantUrl = variantUrl;
+          let compactQuality = height ? height : (bandwidth ? `${Math.round(bandwidth / 1000)}k` : "HLS");
           let label = height ? `${height} (${resolution})` : (bandwidth ? `${Math.round(bandwidth / 1000)} kbps` : "스트림");
           let bitrateStr = (bandwidth >= 1000000) ? (bandwidth / 1000000).toFixed(1) + " Mbps" : Math.round(bandwidth / 1000) + " kbps";
+          let cleanBase = cleanPageTitle(baseTitle, 50) || "동영상_스트림";
           variants.push({
             url: variantUrl,
             type: `HLS ${label}`,
-            title: `${baseTitle} [${label}]`,
-            quality: height || label,
+            title: `${cleanBase} [${compactQuality}]`,
+            quality: compactQuality,
             resolution: resolution || height,
             bandwidth: bandwidth,
             bitrate: bitrateStr,
@@ -260,6 +392,17 @@ chrome.webRequest.onResponseStarted.addListener(
     if (settings.videoSnifferEnabled === false) return;
 
     const url = details.url.toLowerCase();
+
+    // 1. Completely ignore YouTube / GoogleVideo streaming chunks (handled by dedicated YouTube tab detector)
+    if (url.includes("googlevideo.com") || url.includes("youtube.com") || url.includes("youtu.be") || url.includes("videoplayback")) {
+      return;
+    }
+
+    // 2. Ignore fragment chunks (.m4s, .ts, or byte-range requests) to prevent endless counter increase
+    if (url.includes(".m4s") || url.includes(".ts") || url.includes("range=") || url.includes("sq=")) {
+      return;
+    }
+
     let isVideo = false;
     let type = "video";
 
@@ -269,12 +412,9 @@ chrome.webRequest.onResponseStarted.addListener(
     } else if (url.includes(".mpd")) {
       isVideo = true;
       type = "DASH Stream (MPD)";
-    } else if (url.includes(".mp4") || url.includes(".webm") || url.includes(".ts") || url.includes(".m4s") || url.includes(".m4v") || url.includes(".flv")) {
+    } else if (url.includes(".mp4") || url.includes(".webm") || url.includes(".m4v") || url.includes(".flv")) {
       isVideo = true;
-      type = url.includes(".mp4") ? "MP4 Video" : (url.includes(".webm") ? "WebM Video" : (url.includes(".ts") || url.includes(".m4s") ? "Video Segment" : "FLV Video"));
-    } else if (url.includes("videoplayback") || url.includes("mime=video") || url.includes("/stream.") || url.includes("/playlist")) {
-      isVideo = true;
-      type = "Web Video Stream";
+      type = url.includes(".mp4") ? "MP4 Video" : (url.includes(".webm") ? "WebM Video" : "FLV Video");
     } else if (details.responseHeaders) {
       let clen = 0;
       let ctype = "";
@@ -290,10 +430,10 @@ chrome.webRequest.onResponseStarted.addListener(
       if (ctype.includes("application/vnd.apple.mpegurl") || ctype.includes("application/x-mpegurl")) {
         isVideo = true;
         type = "HLS Stream (M3U8)";
-      } else if (ctype.startsWith("video/")) {
+      } else if (ctype.startsWith("video/") && clen > 500 * 1024) {
         isVideo = true;
         type = ctype.replace("video/", "").toUpperCase() + " Video";
-      } else if (clen > 1024 * 1024 && (ctype.includes("octet-stream") || ctype.includes("binary")) &&
+      } else if (clen > 5 * 1024 * 1024 && (ctype.includes("octet-stream") || ctype.includes("binary")) &&
                  (url.includes("video") || url.includes("stream") || url.includes("media") || url.includes("play"))) {
         isVideo = true;
         type = "Media Stream";
@@ -311,9 +451,15 @@ chrome.webRequest.onResponseStarted.addListener(
         let tabReferer = "";
         try {
           const tab = await chrome.tabs.get(details.tabId);
-          if (tab && tab.title) title = tab.title;
+          if (tab && tab.title) title = cleanPageTitle(tab.title);
           if (tab && tab.url) tabReferer = tab.url;
         } catch (e) {}
+
+        if (!title || isGenericStreamTitle(title)) {
+          const slug = extractSlugFromUrl(tabReferer);
+          if (slug) title = slug;
+        }
+        if (!title) title = "동영상 스트림";
 
         let fileSizeStr = "";
         if (details.responseHeaders) {
@@ -359,9 +505,9 @@ chrome.webRequest.onResponseStarted.addListener(
   ["responseHeaders"]
 );
 
-// Clear videos on tab navigation or removal
+// Clear videos on tab navigation, SPA URL change, or removal
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === "loading") {
+  if (changeInfo.status === "loading" || changeInfo.url) {
     tabVideos.delete(tabId);
     chrome.action.setBadgeText({ text: "", tabId: tabId });
   }
@@ -404,6 +550,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // Messages from popup or content script
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const currentTabId = (sender && sender.tab && sender.tab.id) ? sender.tab.id : msg.tabId;
+  if (msg.action === "resetTabVideos") {
+    if (currentTabId) {
+      tabVideos.set(currentTabId, []);
+      chrome.action.setBadgeText({ text: "", tabId: currentTabId });
+    }
+    sendResponse({ status: "ok" });
+    return true;
+  }
   if (msg.action === "getVideos") {
     const list = tabVideos.get(currentTabId) || [];
     sendResponse({ videos: list });
@@ -413,21 +567,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!tabVideos.has(currentTabId)) tabVideos.set(currentTabId, []);
       const list = tabVideos.get(currentTabId);
       if (!list.some(s => s.url === msg.stream.url)) {
-        list.push(msg.stream);
-        chrome.action.setBadgeText({ text: String(list.length), tabId: currentTabId });
-        chrome.action.setBadgeBackgroundColor({ color: "#0284C7", tabId: currentTabId });
+        (async () => {
+          let bestTitle = await getBestTitleForTab(currentTabId, msg.stream.title, msg.stream.url);
+          msg.stream.title = bestTitle;
 
-        // Forward to top frame so in-page UI updates immediately
-        chrome.tabs.sendMessage(currentTabId, {
-          action: "streamDetected",
-          stream: msg.stream,
-          count: list.length
-        }).catch(() => {});
+          list.push(msg.stream);
+          chrome.action.setBadgeText({ text: String(list.length), tabId: currentTabId });
+          chrome.action.setBadgeBackgroundColor({ color: "#0284C7", tabId: currentTabId });
 
-        if (msg.stream.url.includes(".m3u8")) {
-          const tabReferer = (sender && sender.tab) ? sender.tab.url : "";
-          parseM3u8Variants(msg.stream.url, msg.stream.title || "웹 비디오", currentTabId, tabReferer);
-        }
+          // Forward to top frame so in-page UI updates immediately
+          chrome.tabs.sendMessage(currentTabId, {
+            action: "streamDetected",
+            stream: msg.stream,
+            count: list.length
+          }).catch(() => {});
+
+          if (msg.stream.url.includes(".m3u8")) {
+            const tabReferer = (sender && sender.tab) ? sender.tab.url : "";
+            parseM3u8Variants(msg.stream.url, bestTitle, currentTabId, tabReferer);
+          }
+        })();
       }
     }
     sendResponse({ success: true });
@@ -449,12 +608,40 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         } catch (e) {}
       }
 
+      // 1. Prioritize title from UI card (msg.title)
+      let title = (msg.title || "").trim();
+      if (!title || isGenericStreamTitle(title)) {
+        title = await getBestTitleForTab(currentTabId, title, msg.videoUrl);
+      }
+
+      // 2. Separate quality suffix like [1080p] if present
+      let qSuffix = "";
+      const qMatch = title.match(/(\s*\[[^\]]+\])/);
+      if (qMatch) {
+        qSuffix = qMatch[1];
+        title = title.replace(qMatch[1], "").trim();
+      }
+
+      // 3. Clean and enforce 50-character limit on base title
+      title = cleanPageTitle(title, 50);
+      if (!title) title = "웹_동영상";
+
+      // 4. Reattach quality suffix and ensure .mp4
+      title = `${title}${qSuffix}`;
+      if (title.toLowerCase().endsWith(".m3u8")) {
+        title = title.substring(0, title.length - 5);
+      }
+      if (!title.toLowerCase().endsWith(".mp4") && !title.toLowerCase().endsWith(".ts") &&
+          !title.toLowerCase().endsWith(".mkv") && !title.toLowerCase().endsWith(".webm")) {
+        title += ".mp4";
+      }
+
       fetch(`${BRIDGE_URL}/video`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           videoUrl: msg.videoUrl,
-          title: msg.title || "video_download",
+          title: title,
           pageUrl: pageUrl,
           referer: referer,
           cookies: cookiesStr,
@@ -496,13 +683,25 @@ chrome.action.onClicked.addListener(async (tab) => {
   const list = tabVideos.get(tab.id) || [];
   if (list.length > 0) {
     const stream = list[list.length - 1];
+    let bestTitle = stream.title;
+    if (!bestTitle || isGenericStreamTitle(bestTitle)) {
+      bestTitle = await getBestTitleForTab(tab.id, bestTitle, stream.url);
+    }
+    if (bestTitle.toLowerCase().endsWith(".m3u8")) {
+      bestTitle = bestTitle.substring(0, bestTitle.length - 5);
+    }
+    if (!bestTitle.toLowerCase().endsWith(".mp4") && !bestTitle.toLowerCase().endsWith(".ts")) {
+      bestTitle += ".mp4";
+    }
+
     fetch(`${BRIDGE_URL}/video`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         videoUrl: stream.url,
-        title: stream.title || tab.title || "video_download",
+        title: bestTitle,
         pageUrl: tab.url || "",
+        referer: tab.url || "",
         type: stream.type || "video"
       })
     }).catch(err => console.warn("[EasyDownload] Action click download error:", err));

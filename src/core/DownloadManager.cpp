@@ -50,18 +50,37 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
 
     int actualParts = parts > 0 ? parts : Settings::Instance().GetInitialParts();
     std::wstring actualPath = savePath;
+    bool isHls = (url.find(L".m3u8") != std::wstring::npos);
 
     if (actualPath.empty()) {
         std::wstring fname = HttpEngine::ExtractFilenameFromUrl(url);
+        if (HttpEngine::IsGenericFilename(fname) && !referer.empty()) {
+            std::wstring refTitle = HttpEngine::ExtractTitleFromRefererUrl(referer);
+            if (!refTitle.empty()) fname = refTitle + (isHls ? L".mp4" : L"");
+        }
+        if (isHls && fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
+            fname = fname.substr(0, fname.length() - 5) + L".mp4";
+        }
         std::wstring baseDir = Settings::Instance().GetTargetFolderForFilename(fname);
         WCHAR combined[MAX_PATH] = { 0 };
         PathCombineW(combined, baseDir.c_str(), fname.c_str());
         actualPath = combined;
     } else if (PathIsDirectoryW(actualPath.c_str())) {
         std::wstring fname = HttpEngine::ExtractFilenameFromUrl(url);
+        if (HttpEngine::IsGenericFilename(fname) && !referer.empty()) {
+            std::wstring refTitle = HttpEngine::ExtractTitleFromRefererUrl(referer);
+            if (!refTitle.empty()) fname = refTitle + (isHls ? L".mp4" : L"");
+        }
+        if (isHls && fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
+            fname = fname.substr(0, fname.length() - 5) + L".mp4";
+        }
         WCHAR combined[MAX_PATH] = { 0 };
         PathCombineW(combined, actualPath.c_str(), fname.c_str());
         actualPath = combined;
+    }
+
+    if (isHls && actualPath.length() >= 5 && _wcsicmp(actualPath.c_str() + actualPath.length() - 5, L".m3u8") == 0) {
+        actualPath = actualPath.substr(0, actualPath.length() - 5) + L".mp4";
     }
 
     // Automatically ensure filename uniqueness: filename (1).ext, (2).ext, etc.

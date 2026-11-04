@@ -43,6 +43,15 @@ public:
     int GetBridgePort() const { return m_bridgePort; }
     void SetBridgePort(int port) { m_bridgePort = port; }
 
+    bool GetDpiBypassEnabled() const { return m_dpiBypassEnabled; }
+    void SetDpiBypassEnabled(bool enable) { m_dpiBypassEnabled = enable; }
+
+    int GetDpiBypassMode() const { return m_dpiBypassMode; }
+    void SetDpiBypassMode(int mode) { m_dpiBypassMode = mode; }
+
+    int GetInternetSpeedTier() const { return m_internetSpeedTier; }
+    void SetInternetSpeedTier(int tier) { m_internetSpeedTier = tier; }
+
     const std::vector<CategoryRule>& GetCategoryRules() const { return m_categories; }
     void SetCategoryRules(const std::vector<CategoryRule>& rules) { m_categories = rules; }
 
@@ -58,13 +67,16 @@ private:
     void InitDefaultCategories();
 
     std::wstring m_downloadDir;
-    int m_initialParts{ 1 };
+    int m_initialParts{ 8 };
     int m_maxParts{ 12 };
     bool m_adaptiveSpeedSplitting{ true };
     int m_maxConcurrentTasks{ 3 };
-    bool m_autoStartWithWindows{ false };
+    bool m_autoStartWithWindows{ true };
     bool m_startMinimized{ false };
     int m_bridgePort{ 18989 };
+    bool m_dpiBypassEnabled{ true };
+    int m_dpiBypassMode{ 0 };
+    int m_internetSpeedTier{ 0 };
 
     std::vector<CategoryRule> m_categories;
 };

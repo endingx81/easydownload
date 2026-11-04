@@ -1,4 +1,6 @@
 #include "LocalServer.h"
+#include "DpiBypassManager.h"
+#include "Settings.h"
 #include <sstream>
 #include <vector>
 #include <iostream>
@@ -25,25 +27,47 @@ static std::wstring ExtractJsonString(const std::string& json, const std::string
     size_t quoteStart = json.find('\"', colon + 1);
     if (quoteStart == std::string::npos) return L"";
 
-    std::string value;
+    std::wstring result;
+    std::string utf8Chunk;
     bool escaped = false;
+
+    auto flushUtf8 = [&]() {
+        if (!utf8Chunk.empty()) {
+            result += Utf8ToWide(utf8Chunk);
+            utf8Chunk.clear();
+        }
+    };
+
     for (size_t i = quoteStart + 1; i < json.length(); ++i) {
         char c = json[i];
         if (escaped) {
-            if (c == 'n') value += '\n';
-            else if (c == 'r') value += '\r';
-            else if (c == 't') value += '\t';
-            else value += c;
+            if (c == 'n') { utf8Chunk += '\n'; }
+            else if (c == 'r') { utf8Chunk += '\r'; }
+            else if (c == 't') { utf8Chunk += '\t'; }
+            else if (c == 'u' && i + 4 < json.length()) {
+                flushUtf8();
+                std::string hexStr = json.substr(i + 1, 4);
+                try {
+                    wchar_t codePoint = (wchar_t)std::stoul(hexStr, nullptr, 16);
+                    result.push_back(codePoint);
+                    i += 4;
+                } catch (...) {
+                    utf8Chunk += 'u';
+                }
+            } else {
+                utf8Chunk += c;
+            }
             escaped = false;
         } else if (c == '\\') {
             escaped = true;
         } else if (c == '\"') {
             break;
         } else {
-            value += c;
+            utf8Chunk += c;
         }
     }
-    return Utf8ToWide(value);
+    flushUtf8();
+    return result;
 }
 
 LocalServer& LocalServer::Instance() {
@@ -126,13 +150,49 @@ void LocalServer::ServerLoop() {
 }
 
 void LocalServer::HandleClient(SOCKET clientSock) {
-    std::vector<char> reqBuf(16 * 1024);
-    int bytesRecv = recv(clientSock, reqBuf.data(), (int)reqBuf.size() - 1, 0);
+    DWORD timeout = 3000;
+    setsockopt(clientSock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
 
-    if (bytesRecv > 0) {
-        reqBuf[bytesRecv] = 0;
-        std::string request(reqBuf.data(), bytesRecv);
+    std::string request;
+    char chunk[4096];
+    size_t bodyPos = std::string::npos;
+    size_t contentLength = 0;
+    bool headerParsed = false;
 
+    while (true) {
+        int bytes = recv(clientSock, chunk, sizeof(chunk), 0);
+        if (bytes <= 0) break;
+        request.append(chunk, bytes);
+
+        if (!headerParsed) {
+            bodyPos = request.find("\r\n\r\n");
+            if (bodyPos != std::string::npos) {
+                headerParsed = true;
+                // Parse Content-Length
+                std::string lowerReq = request;
+                for (auto& c : lowerReq) c = (char)tolower((unsigned char)c);
+                size_t clPos = lowerReq.find("content-length:");
+                if (clPos != std::string::npos && clPos < bodyPos) {
+                    size_t numStart = lowerReq.find_first_not_of(" \t", clPos + 15);
+                    size_t numEnd = lowerReq.find("\r\n", numStart);
+                    if (numStart != std::string::npos && numEnd != std::string::npos) {
+                        try {
+                            contentLength = std::stoul(lowerReq.substr(numStart, numEnd - numStart));
+                        } catch (...) {}
+                    }
+                }
+            }
+        }
+
+        if (headerParsed) {
+            size_t currentBodyLen = request.length() - (bodyPos + 4);
+            if (currentBodyLen >= contentLength) {
+                break; // Full body received!
+            }
+        }
+    }
+
+    if (!request.empty()) {
         std::string line;
         std::istringstream stream(request);
         std::getline(stream, line);
@@ -146,15 +206,29 @@ void LocalServer::HandleClient(SOCKET clientSock) {
         if (line.rfind("OPTIONS", 0) == 0) {
             std::string res = "HTTP/1.1 200 OK\r\n" + corsHeaders + "Content-Length: 0\r\n\r\n";
             send(clientSock, res.data(), (int)res.size(), 0);
+        } else if (line.find("POST /exit") != std::string::npos) {
+            std::string res = "HTTP/1.1 200 OK\r\n" + corsHeaders + "Content-Length: 0\r\n\r\n";
+            send(clientSock, res.data(), (int)res.size(), 0);
+            closesocket(clientSock);
+            std::thread([]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                ExitProcess(0);
+            }).detach();
+            return;
         } else if (line.find("GET /ping") != std::string::npos || line.find("GET /status") != std::string::npos) {
-            std::string json = "{\"status\":\"ok\",\"app\":\"EasyDownload\",\"version\":\"1.0.0\"}";
+            bool dpiRunning = DpiBypassManager::Instance().IsRunning();
+            int dpiMode = Settings::Instance().GetDpiBypassMode();
+            std::string json = "{\"status\":\"ok\",\"app\":\"EasyDownload\",\"version\":\"1.3.9\",\"dpi_running\":" +
+                               std::string(dpiRunning ? "true" : "false") +
+                               ",\"dpi_mode\":" + std::to_string(dpiMode) +
+                               ",\"doh_configured\":" + std::string(DpiBypassManager::IsChromeDohConfigured() ? "true" : "false") + "}";
             std::string res = "HTTP/1.1 200 OK\r\n" + corsHeaders +
                               "Content-Type: application/json\r\n"
                               "Content-Length: " + std::to_string(json.length()) + "\r\n\r\n" + json;
             send(clientSock, res.data(), (int)res.size(), 0);
         } else if (line.find("POST /download") != std::string::npos) {
-            size_t bodyPos = request.find("\r\n\r\n");
-            std::string body = (bodyPos != std::string::npos) ? request.substr(bodyPos + 4) : "";
+            bodyPos = request.find("\r\n\r\n");
+            std::string body = (bodyPos != std::string::npos) ? (contentLength > 0 ? request.substr(bodyPos + 4, contentLength) : request.substr(bodyPos + 4)) : "";
 
             DownloadRequest req;
             req.url = ExtractJsonString(body, "url");
@@ -173,8 +247,8 @@ void LocalServer::HandleClient(SOCKET clientSock) {
                               "Content-Length: " + std::to_string(json.length()) + "\r\n\r\n" + json;
             send(clientSock, res.data(), (int)res.size(), 0);
         } else if (line.find("POST /video") != std::string::npos) {
-            size_t bodyPos = request.find("\r\n\r\n");
-            std::string body = (bodyPos != std::string::npos) ? request.substr(bodyPos + 4) : "";
+            bodyPos = request.find("\r\n\r\n");
+            std::string body = (bodyPos != std::string::npos) ? (contentLength > 0 ? request.substr(bodyPos + 4, contentLength) : request.substr(bodyPos + 4)) : "";
 
             VideoDetectedInfo info;
             info.pageUrl = ExtractJsonString(body, "pageUrl");

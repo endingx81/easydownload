@@ -4,6 +4,7 @@
 #include "Settings.h"
 #include <shlobj.h>
 #include <shlwapi.h>
+#include <winioctl.h>
 #include <ctime>
 #include <sstream>
 #include <iomanip>
@@ -39,12 +40,10 @@ DownloadTask::DownloadTask(
     m_savePath(savePath),
     m_referer(referer),
     m_cookies(cookies),
-    m_numParts(numParts > 0 ? (numParts > 12 ? 12 : numParts) : Settings::Instance().GetInitialParts())
+    m_numParts(numParts > 0 ? (numParts > 12 ? 12 : numParts) : 8)
 {
     m_id = GenerateGuid();
     m_createdAt = GetCurrentTimeString();
-    m_adaptiveSpeedSplitting = Settings::Instance().GetAdaptiveSpeedSplitting();
-    m_maxPartsLimit = Settings::Instance().GetMaxParts();
 
     WCHAR fname[MAX_PATH] = { 0 };
     wcscpy_s(fname, m_savePath.c_str());
@@ -62,6 +61,14 @@ DownloadTask::DownloadTask(
 
     m_isHls = (m_url.find(L".m3u8") != std::wstring::npos);
     if (m_isHls) {
+        // Enforce .mp4 extension for HLS downloads (never save as .m3u8 playlist file!)
+        if (m_filename.length() >= 5 && _wcsicmp(m_filename.c_str() + m_filename.length() - 5, L".m3u8") == 0) {
+            m_filename = m_filename.substr(0, m_filename.length() - 5) + L".mp4";
+        }
+        if (m_savePath.length() >= 5 && _wcsicmp(m_savePath.c_str() + m_savePath.length() - 5, L".m3u8") == 0) {
+            m_savePath = m_savePath.substr(0, m_savePath.length() - 5) + L".mp4";
+        }
+
         std::lock_guard<std::mutex> lock(m_chunkMutex);
         m_chunks.clear();
         for (int i = 0; i < 8; ++i) {
@@ -101,6 +108,8 @@ void DownloadTask::Pause() {
     if (m_status != TaskStatus::Downloading && m_status != TaskStatus::Connecting) return;
     m_pauseFlag = true;
     m_status = TaskStatus::Paused;
+    m_currentSpeed = 0;
+    SaveResumeState();
     if (m_onStatusChanged) m_onStatusChanged(this);
 }
 
@@ -113,10 +122,13 @@ void DownloadTask::Resume() {
 void DownloadTask::Cancel() {
     m_abortFlag = true;
     m_pauseFlag = false;
-    for (auto& t : m_workerThreads) {
-        if (t.joinable()) t.join();
+    m_status = TaskStatus::Paused;
+    m_currentSpeed = 0;
+    SaveResumeState();
+    if (m_onStatusChanged) m_onStatusChanged(this);
+    if (m_mainThread.joinable() && std::this_thread::get_id() != m_mainThread.get_id()) {
+        m_mainThread.join();
     }
-    m_workerThreads.clear();
 }
 
 int DownloadTask::GetNumParts() const {
@@ -129,7 +141,7 @@ std::wstring DownloadTask::GetStatusString() const {
     case TaskStatus::Queued: return L"대기 중";
     case TaskStatus::Connecting: return L"연결 중...";
     case TaskStatus::Downloading: return L"다운로드 중";
-    case TaskStatus::Paused: return L"일시 정지";
+    case TaskStatus::Paused: return L"중단됨";
     case TaskStatus::Completed: return L"완료됨";
     case TaskStatus::Error: return L"오류";
     default: return L"알 수 없음";
@@ -197,50 +209,9 @@ void DownloadTask::CleanResumeState() {
     DeleteFileW(partFile.c_str());
 }
 
-bool DownloadTask::TryStealWork(RangeItem& outRange) {
-    std::lock_guard<std::mutex> lock(m_chunkMutex);
-    if ((int)m_chunks.size() >= m_maxPartsLimit) return false;
+void DownloadTask::WorkerThreadFunc(HANDLE hTargetFile) {
+    m_activeWorkers++;
 
-    int bestIdx = -1;
-    int64_t maxRemaining = 0;
-
-    for (size_t i = 0; i < m_chunks.size(); ++i) {
-        if (m_chunks[i].completed) continue;
-        int64_t curStart = m_chunks[i].startByte + m_chunks[i].downloadedBytes;
-        int64_t rem = m_chunks[i].endByte - curStart + 1;
-        if (rem > maxRemaining) {
-            maxRemaining = rem;
-            bestIdx = (int)i;
-        }
-    }
-
-    // Split if remaining is at least 2 MB
-    if (bestIdx >= 0 && maxRemaining >= (2 * 1024 * 1024)) {
-        int64_t curStart = m_chunks[bestIdx].startByte + m_chunks[bestIdx].downloadedBytes;
-        int64_t half = maxRemaining / 2;
-        int64_t newStart = curStart + half;
-        int64_t oldEnd = m_chunks[bestIdx].endByte;
-
-        m_chunks[bestIdx].endByte = newStart - 1;
-
-        ChunkProgress newChunk;
-        newChunk.index = (int)m_chunks.size();
-        newChunk.startByte = newStart;
-        newChunk.endByte = oldEnd;
-        newChunk.downloadedBytes = 0;
-        newChunk.completed = false;
-        m_chunks.push_back(newChunk);
-
-        outRange.chunkIndex = newChunk.index;
-        outRange.startByte = newStart;
-        outRange.endByte = oldEnd;
-        return true;
-    }
-
-    return false;
-}
-
-void DownloadTask::WorkerThreadFunc(HANDLE hTargetFile, std::atomic<int>& activeWorkers) {
     while (!m_abortFlag && !m_pauseFlag) {
         RangeItem taskRange = { -1, 0, -1 };
         bool hasRange = false;
@@ -255,43 +226,20 @@ void DownloadTask::WorkerThreadFunc(HANDLE hTargetFile, std::atomic<int>& active
         }
 
         if (!hasRange) {
-            // Try to steal work from chunks that have plenty of bytes left!
-            if (TryStealWork(taskRange)) {
-                hasRange = true;
-            } else {
-                // No more work in queue or to steal
-                break;
-            }
+            break;
         }
 
-        // Download this range with aggressive retries
         int64_t currentOffset = taskRange.startByte;
         int retryCount = 0;
         const int maxRetries = 5;
 
-        while (currentOffset <= taskRange.endByte && !m_abortFlag && !m_pauseFlag) {
-            // Check dynamic chunk endByte in case it was split by work-stealing
-            int64_t effectiveEndByte = taskRange.endByte;
-            {
-                std::lock_guard<std::mutex> lock(m_chunkMutex);
-                if (taskRange.chunkIndex >= 0 && taskRange.chunkIndex < (int)m_chunks.size()) {
-                    effectiveEndByte = m_chunks[taskRange.chunkIndex].endByte;
-                }
-            }
-            if (currentOffset > effectiveEndByte) {
-                std::lock_guard<std::mutex> lock(m_chunkMutex);
-                if (taskRange.chunkIndex >= 0 && taskRange.chunkIndex < (int)m_chunks.size()) {
-                    m_chunks[taskRange.chunkIndex].completed = true;
-                }
-                break;
-            }
-
+        while ((taskRange.endByte < 0 || currentOffset <= taskRange.endByte) && !m_abortFlag && !m_pauseFlag) {
             bool ok = HttpEngine::DownloadRange(
                 m_url,
                 m_referer,
                 m_cookies,
                 currentOffset,
-                effectiveEndByte,
+                taskRange.endByte,
                 hTargetFile,
                 m_abortFlag,
                 m_pauseFlag,
@@ -303,19 +251,23 @@ void DownloadTask::WorkerThreadFunc(HANDLE hTargetFile, std::atomic<int>& active
                         std::lock_guard<std::mutex> lock(m_chunkMutex);
                         if (taskRange.chunkIndex >= 0 && taskRange.chunkIndex < (int)m_chunks.size()) {
                             m_chunks[taskRange.chunkIndex].downloadedBytes += bytesRead;
-                            if (m_chunks[taskRange.chunkIndex].startByte + m_chunks[taskRange.chunkIndex].downloadedBytes > m_chunks[taskRange.chunkIndex].endByte) {
+                            if (taskRange.endByte >= 0 && m_chunks[taskRange.chunkIndex].startByte + m_chunks[taskRange.chunkIndex].downloadedBytes > m_chunks[taskRange.chunkIndex].endByte) {
                                 m_chunks[taskRange.chunkIndex].completed = true;
                             }
                         }
                     }
-                }
+                },
+                &m_fileWriteMutex
             );
 
-            if (ok || currentOffset > effectiveEndByte) {
-                // Range finished
+            if (ok || (taskRange.endByte >= 0 && currentOffset > taskRange.endByte)) {
+                // Range or single stream finished
                 std::lock_guard<std::mutex> lock(m_chunkMutex);
                 if (taskRange.chunkIndex >= 0 && taskRange.chunkIndex < (int)m_chunks.size()) {
                     m_chunks[taskRange.chunkIndex].completed = true;
+                    if (taskRange.endByte < 0) {
+                        m_chunks[taskRange.chunkIndex].endByte = currentOffset > 0 ? (currentOffset - 1) : 0;
+                    }
                 }
                 break;
             }
@@ -325,8 +277,8 @@ void DownloadTask::WorkerThreadFunc(HANDLE hTargetFile, std::atomic<int>& active
             // Connection broke or failed, retry with backoff
             retryCount++;
             if (retryCount >= maxRetries) {
-                // Push unfinished range back into queue so another surviving worker can take it over!
-                if (currentOffset <= taskRange.endByte) {
+                // Push unfinished range back into queue so another surviving worker can take it over
+                if (taskRange.endByte < 0 || currentOffset <= taskRange.endByte) {
                     std::lock_guard<std::mutex> lock(m_rangeMutex);
                     RangeItem unfinished = { taskRange.chunkIndex, currentOffset, taskRange.endByte };
                     m_rangeQueue.push_back(unfinished);
@@ -334,15 +286,146 @@ void DownloadTask::WorkerThreadFunc(HANDLE hTargetFile, std::atomic<int>& active
                 break;
             }
 
-            // Exponential backoff sleep (1s, 2s, 3s...)
-            std::this_thread::sleep_for(std::chrono::milliseconds(800 * retryCount));
+            // Backoff sleep (500ms, 1000ms...)
+            std::this_thread::sleep_for(std::chrono::milliseconds(500 * retryCount));
         }
     }
 
-    activeWorkers--;
+    m_activeWorkers--;
 }
 
 void DownloadTask::WorkerLoop() {
+    bool isYouTube = m_isYouTube ||
+        (m_url.find(L"youtube.com/watch") != std::wstring::npos) ||
+        (m_url.find(L"youtu.be/") != std::wstring::npos) ||
+        (m_url.find(L"youtube.com/shorts/") != std::wstring::npos);
+
+    if (isYouTube) {
+        m_isYouTube = true;
+        m_status = TaskStatus::Downloading;
+        if (m_onStatusChanged) m_onStatusChanged(this);
+
+        // 1. Fetch real video title with yt-dlp if available
+        std::wstring realTitle = HlsDownloader::GetVideoTitleWithYtDlp(m_url);
+        if (!realTitle.empty()) {
+            m_filename = realTitle + L".mp4";
+            WCHAR dir[MAX_PATH] = { 0 };
+            wcscpy_s(dir, m_savePath.c_str());
+            PathRemoveFileSpecW(dir);
+            m_savePath = std::wstring(dir) + L"\\" + m_filename;
+        }
+
+        WCHAR dir[MAX_PATH] = { 0 };
+        wcscpy_s(dir, m_savePath.c_str());
+        PathRemoveFileSpecW(dir);
+        SHCreateDirectoryExW(NULL, dir, NULL);
+
+        // Initialize visual segment chunks
+        {
+            std::lock_guard<std::mutex> lock(m_chunkMutex);
+            m_chunks.clear();
+            for (int i = 0; i < 8; ++i) {
+                ChunkProgress cp;
+                cp.index = i;
+                cp.startByte = i * 1000;
+                cp.endByte = (i + 1) * 1000 - 1;
+                cp.downloadedBytes = 0;
+                cp.completed = false;
+                m_chunks.push_back(cp);
+            }
+        }
+
+        m_activeWorkers = 1;
+        m_totalBytes = -1;
+        m_downloadedBytes = 0;
+        m_currentSpeed = 0;
+
+        bool ok = HlsDownloader::DownloadWithYtDlp(
+            m_url,
+            m_savePath,
+            m_abortFlag,
+            [this](int percent, int64_t downBytes, int64_t totalBytes, int64_t speedBytes) {
+                if (percent < 0) percent = 0;
+                if (percent > 100) percent = 100;
+
+                if (totalBytes > 0) {
+                    m_totalBytes = totalBytes;
+                    m_downloadedBytes = downBytes;
+                } else if (downBytes > 0) {
+                    m_downloadedBytes = downBytes;
+                }
+
+                if (speedBytes > 0) {
+                    m_currentSpeed = speedBytes;
+                }
+
+                int activeBlocks = (percent * 8) / 100;
+                {
+                    std::lock_guard<std::mutex> lock(m_chunkMutex);
+                    for (int i = 0; i < (int)m_chunks.size(); ++i) {
+                        if (i < activeBlocks) {
+                            m_chunks[i].downloadedBytes = 1000;
+                            m_chunks[i].completed = true;
+                        } else if (i == activeBlocks) {
+                            int rem = (percent * 8) % 100;
+                            m_chunks[i].downloadedBytes = rem * 10;
+                            m_chunks[i].completed = false;
+                        } else {
+                            m_chunks[i].downloadedBytes = 0;
+                            m_chunks[i].completed = false;
+                        }
+                    }
+                }
+                if (m_onStatusChanged) m_onStatusChanged(this);
+            }
+        );
+
+        m_activeWorkers = 0;
+
+        if (ok) {
+            m_status = TaskStatus::Completed;
+            m_currentSpeed = 0;
+            auto now = std::chrono::system_clock::now();
+            auto in_time_t = std::chrono::system_clock::to_time_t(now);
+            struct tm timeinfo;
+            localtime_s(&timeinfo, &in_time_t);
+            WCHAR timeBuf[64] = { 0 };
+            wcsftime(timeBuf, 64, L"%Y-%m-%d %H:%M:%S", &timeinfo);
+            m_completedAt = timeBuf;
+
+            WIN32_FILE_ATTRIBUTE_DATA fad = { 0 };
+            if (GetFileAttributesExW(m_savePath.c_str(), GetFileExInfoStandard, &fad)) {
+                LARGE_INTEGER li;
+                li.LowPart = fad.nFileSizeLow;
+                li.HighPart = fad.nFileSizeHigh;
+                m_totalBytes = li.QuadPart;
+                m_downloadedBytes = li.QuadPart;
+            } else {
+                m_totalBytes = 100;
+                m_downloadedBytes = 100;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(m_chunkMutex);
+                for (auto& cp : m_chunks) {
+                    cp.completed = true;
+                    cp.downloadedBytes = (cp.endByte - cp.startByte) + 1;
+                }
+            }
+        } else {
+            if (!m_abortFlag && !m_pauseFlag) {
+                m_status = TaskStatus::Error;
+                m_errorMessage = L"YouTube 다운로드 실패 (yt-dlp 실행 오류 또는 차단)";
+            } else {
+                m_status = TaskStatus::Paused;
+                m_currentSpeed = 0;
+            }
+        }
+
+        if (m_onStatusChanged) m_onStatusChanged(this);
+        return;
+    }
+
     bool isHls = m_isHls || (m_url.find(L".m3u8") != std::wstring::npos);
     if (isHls) {
         WCHAR dir[MAX_PATH] = { 0 };
@@ -372,6 +455,7 @@ void DownloadTask::WorkerLoop() {
             }
         }
 
+        m_activeWorkers = 8;
         bool ok = HlsDownloader::DownloadHlsStream(
             m_url,
             m_savePath,
@@ -380,7 +464,7 @@ void DownloadTask::WorkerLoop() {
             8,
             m_abortFlag,
             m_pauseFlag,
-            [this, &lastReportedBytes](int completedSegs, int totalSegs, int64_t bytesRead) {
+            [this, &lastReportedBytes](int workerIdx, int workerCompleted, int workerTotal, int completedSegs, int totalSegs, int64_t bytesRead) {
                 int64_t delta = bytesRead - lastReportedBytes;
                 lastReportedBytes = bytesRead;
                 if (delta > 0) {
@@ -401,36 +485,37 @@ void DownloadTask::WorkerLoop() {
                     m_totalBytes = avg * totalSegs;
                 }
 
-                // Update visual segment chunks
+                // Update visual segment chunks in parallel!
                 {
                     std::lock_guard<std::mutex> lock(m_chunkMutex);
-                    double ratio = (double)completedSegs / (double)(totalSegs > 0 ? totalSegs : 1);
-                    int activeChunk = (int)(ratio * 8.0);
-                    if (activeChunk > 8) activeChunk = 8;
-                    for (int i = 0; i < 8; ++i) {
-                        int64_t chunkTotal = (m_chunks[i].endByte - m_chunks[i].startByte) + 1;
-                        if (i < activeChunk) {
-                            m_chunks[i].completed = true;
-                            m_chunks[i].downloadedBytes = chunkTotal;
-                        } else if (i == activeChunk) {
-                            m_chunks[i].completed = false;
-                            double subRatio = (ratio * 8.0) - activeChunk;
-                            m_chunks[i].downloadedBytes = (int64_t)(subRatio * chunkTotal);
-                        } else {
-                            m_chunks[i].completed = false;
-                            m_chunks[i].downloadedBytes = 0;
+                    if (workerIdx >= 0 && workerIdx < (int)m_chunks.size()) {
+                        int64_t chunkTotal = (m_chunks[workerIdx].endByte - m_chunks[workerIdx].startByte) + 1;
+                        if (workerTotal > 0) {
+                            double prog = (double)workerCompleted / (double)workerTotal;
+                            if (prog > 1.0) prog = 1.0;
+                            m_chunks[workerIdx].downloadedBytes = (int64_t)(prog * chunkTotal);
+                            if (workerCompleted >= workerTotal) {
+                                m_chunks[workerIdx].completed = true;
+                                m_chunks[workerIdx].downloadedBytes = chunkTotal;
+                            }
                         }
                     }
                 }
             }
         );
+        m_activeWorkers = 0;
 
         m_currentSpeed = 0;
 
         if (ok) {
             m_status = TaskStatus::Completed;
+            m_currentSpeed = 0;
             m_completedAt = GetCurrentTimeString();
             m_totalBytes = m_downloadedBytes.load();
+            if (m_savePath.length() >= 5 && _wcsicmp(m_savePath.c_str() + m_savePath.length() - 5, L".m3u8") == 0) {
+                m_savePath = m_savePath.substr(0, m_savePath.length() - 5) + L".mp4";
+                m_filename = HttpEngine::ExtractFilenameFromUrl(m_savePath);
+            }
             {
                 std::lock_guard<std::mutex> lock(m_chunkMutex);
                 for (auto& cp : m_chunks) {
@@ -442,6 +527,9 @@ void DownloadTask::WorkerLoop() {
             if (!m_abortFlag && !m_pauseFlag) {
                 m_status = TaskStatus::Error;
                 m_errorMessage = L"HLS 스트림 다운로드 실패 (세그먼트 수신 차단 또는 재생 목록 오류)";
+            } else {
+                m_status = TaskStatus::Paused;
+                m_currentSpeed = 0;
             }
         }
 
@@ -464,7 +552,19 @@ void DownloadTask::WorkerLoop() {
         return;
     }
 
+    if (!info.finalUrl.empty()) {
+        m_url = info.finalUrl;
+    }
+
     m_totalBytes = info.contentLength;
+
+    if (!info.filename.empty() && (HttpEngine::IsGenericFilename(m_filename) || m_filename == L"download.bin")) {
+        m_filename = info.filename;
+        WCHAR dir[MAX_PATH] = { 0 };
+        wcscpy_s(dir, m_savePath.c_str());
+        PathRemoveFileSpecW(dir);
+        m_savePath = std::wstring(dir) + L"\\" + m_filename;
+    }
 
     WCHAR dir[MAX_PATH] = { 0 };
     wcscpy_s(dir, m_savePath.c_str());
@@ -491,6 +591,19 @@ void DownloadTask::WorkerLoop() {
     }
 
     if (m_totalBytes > 0) {
+        // Mark as sparse file so Windows doesn't synchronously zero-fill gigabytes of disk clusters (instant 0ms allocation!)
+        DWORD dwBytesReturned = 0;
+        DeviceIoControl(
+            hTargetFile,
+            FSCTL_SET_SPARSE,
+            NULL,
+            0,
+            NULL,
+            0,
+            &dwBytesReturned,
+            NULL
+        );
+
         LARGE_INTEGER li;
         li.QuadPart = m_totalBytes;
         SetFilePointerEx(hTargetFile, li, NULL, FILE_BEGIN);
@@ -503,11 +616,19 @@ void DownloadTask::WorkerLoop() {
     }
 
     if (useRange) {
+        auto& settings = Settings::Instance();
+        bool adaptive = settings.GetAdaptiveSpeedSplitting();
+        int initialParts = settings.GetInitialParts();
+        int maxParts = settings.GetMaxParts();
+
         bool hasResume = LoadResumeState();
         if (!hasResume) {
             std::lock_guard<std::mutex> lock(m_chunkMutex);
             m_chunks.clear();
-            int actualParts = m_numParts > 12 ? 12 : (m_numParts < 1 ? 1 : m_numParts);
+            int actualParts = adaptive ? initialParts : m_numParts;
+            if (actualParts > maxParts) actualParts = maxParts;
+            if (actualParts > 12) actualParts = 12;
+            if (actualParts < 1) actualParts = 1;
             int64_t chunkSize = m_totalBytes / actualParts;
 
             for (int i = 0; i < actualParts; ++i) {
@@ -548,7 +669,7 @@ void DownloadTask::WorkerLoop() {
         cp.completed = false;
         m_chunks.push_back(cp);
 
-        RangeItem item = { 0, 0, cp.endByte };
+        RangeItem item = { 0, 0, (info.acceptRanges ? cp.endByte : -1) };
         m_rangeQueue.push_back(item);
     }
 
@@ -556,24 +677,35 @@ void DownloadTask::WorkerLoop() {
     if (m_onStatusChanged) m_onStatusChanged(this);
 
     m_lastSpeedCalcTime = std::chrono::steady_clock::now();
-    m_lastRampCheckTime = m_lastSpeedCalcTime;
     m_bytesSinceLastSpeedCalc = 0;
-    m_lastRampCheckSpeed = 0;
-    m_rampUpFinished = !m_adaptiveSpeedSplitting;
 
     m_workerThreads.clear();
-    std::atomic<int> activeWorkers{ 0 };
 
     int threadCount = (int)m_chunks.size();
-    if (threadCount > m_maxPartsLimit) threadCount = m_maxPartsLimit;
+    if (threadCount > 12) threadCount = 12;
     if (threadCount < 1) threadCount = 1;
 
     for (int i = 0; i < threadCount; ++i) {
-        activeWorkers++;
-        m_workerThreads.emplace_back(&DownloadTask::WorkerThreadFunc, this, hTargetFile, std::ref(activeWorkers));
+        m_workerThreads.emplace_back(&DownloadTask::WorkerThreadFunc, this, hTargetFile);
     }
 
-    // Dynamic supervisor loop
+    auto& settings = Settings::Instance();
+    bool adaptive = settings.GetAdaptiveSpeedSplitting();
+    int maxParts = settings.GetMaxParts();
+    int speedTier = settings.GetInternetSpeedTier();
+
+    int64_t saturationThreshold = INT64_MAX;
+    if (speedTier == 1) saturationThreshold = 11000000LL;        // 100 Mbps (~11 MB/s)
+    else if (speedTier == 2) saturationThreshold = 55000000LL;   // 500 Mbps (~55 MB/s)
+    else if (speedTier == 3) saturationThreshold = 110000000LL;  // 1 Gbps (~110 MB/s)
+    else if (speedTier == 4) saturationThreshold = 260000000LL;  // 2.5 Gbps+ (~260 MB/s)
+
+    int adaptiveCheckTicks = 0;
+    int64_t prevSpeed = 0;
+    int stagnantSeconds = 0;
+    int cooldownSeconds = 3; // Initial 3s warm-up for initial connections to ramp up
+
+    // Monitoring loop
     while (!m_abortFlag && !m_pauseFlag) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
@@ -586,69 +718,99 @@ void DownloadTask::WorkerLoop() {
             m_lastSpeedCalcTime = now;
         }
 
-        // Adaptive speed-ramping check (every ~2.5s)
-        auto rampElapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastRampCheckTime).count();
-        if (m_adaptiveSpeedSplitting && !m_rampUpFinished && rampElapsedMs >= 2500) {
-            m_lastRampCheckTime = now;
-            int64_t curSpeed = m_currentSpeed.load();
+        // Smart Adaptive Acceleration: Ramp up connections to maximize final speed,
+        // but wait for speed to stabilize and avoid splitting while speed is actively climbing or line is saturated.
+        if (adaptive && useRange && !m_abortFlag && !m_pauseFlag) {
+            adaptiveCheckTicks++;
+            if (adaptiveCheckTicks >= 4) { // every ~1000ms
+                adaptiveCheckTicks = 0;
+                int64_t currentSpeed = m_currentSpeed.load();
 
-            int64_t remBytes = (m_totalBytes > 0) ? (m_totalBytes - m_downloadedBytes.load()) : 0;
-            int curWorkers = activeWorkers.load();
-
-            if (curWorkers < m_maxPartsLimit && remBytes >= (3 * 1024 * 1024) && curSpeed > 0) {
-                if (m_lastRampCheckSpeed == 0) {
-                    m_lastRampCheckSpeed = curSpeed;
-                    RangeItem stealRange;
-                    if (TryStealWork(stealRange)) {
-                        {
-                            std::lock_guard<std::mutex> rLock(m_rangeMutex);
-                            m_rangeQueue.push_back(stealRange);
-                        }
-                        activeWorkers++;
-                        m_workerThreads.emplace_back(&DownloadTask::WorkerThreadFunc, this, hTargetFile, std::ref(activeWorkers));
-                    }
+                // If already at or above saturation threshold, halt further splitting
+                if (currentSpeed >= saturationThreshold) {
+                    stagnantSeconds = 0;
+                    prevSpeed = currentSpeed;
+                } else if (cooldownSeconds > 0) {
+                    // Warm-up / stabilization cooldown after initial start or adding a connection
+                    cooldownSeconds--;
+                    prevSpeed = currentSpeed;
                 } else {
-                    if (curSpeed > (int64_t)(m_lastRampCheckSpeed * 1.12)) {
-                        m_lastRampCheckSpeed = curSpeed;
-                        RangeItem stealRange;
-                        if (TryStealWork(stealRange)) {
-                            {
-                                std::lock_guard<std::mutex> rLock(m_rangeMutex);
-                                m_rangeQueue.push_back(stealRange);
-                            }
-                            activeWorkers++;
-                            m_workerThreads.emplace_back(&DownloadTask::WorkerThreadFunc, this, hTargetFile, std::ref(activeWorkers));
-                        } else {
-                            m_rampUpFinished = true;
+                    // Check if speed is actively climbing
+                    bool isAccelerating = false;
+                    if (prevSpeed > 0) {
+                        int64_t gain = currentSpeed - prevSpeed;
+                        // Speed increased by >= 5% and gained at least 200KB/s
+                        if (gain > (int64_t)(prevSpeed * 0.05) && gain > 200 * 1024) {
+                            isAccelerating = true;
                         }
+                    }
+
+                    if (isAccelerating) {
+                        // Current connections are still actively ramping up! Keep letting them accelerate.
+                        stagnantSeconds = 0;
+                        prevSpeed = currentSpeed;
                     } else {
-                        m_rampUpFinished = true;
+                        // Speed has plateaued or fluctuated without significant gain
+                        stagnantSeconds++;
+                        prevSpeed = currentSpeed;
+
+                        // Only add connection when speed has plateaued for at least 2 consecutive seconds
+                        if (stagnantSeconds >= 2 && (int)m_chunks.size() < maxParts) {
+                            std::lock_guard<std::mutex> lock(m_chunkMutex);
+                            int largestIdx = -1;
+                            int64_t maxRemaining = 0;
+
+                            for (size_t i = 0; i < m_chunks.size(); ++i) {
+                                if (!m_chunks[i].completed) {
+                                    int64_t curHead = m_chunks[i].startByte + m_chunks[i].downloadedBytes;
+                                    int64_t rem = m_chunks[i].endByte - curHead;
+                                    if (rem > maxRemaining && rem >= (4 * 1024 * 1024)) {
+                                        maxRemaining = rem;
+                                        largestIdx = (int)i;
+                                    }
+                                }
+                            }
+
+                            if (largestIdx >= 0 && (int)m_chunks.size() < maxParts) {
+                                int64_t curHead = m_chunks[largestIdx].startByte + m_chunks[largestIdx].downloadedBytes;
+                                int64_t oldEnd = m_chunks[largestIdx].endByte;
+                                int64_t half = (oldEnd - curHead) / 2;
+                                int64_t splitPoint = curHead + half;
+
+                                m_chunks[largestIdx].endByte = splitPoint - 1;
+
+                                ChunkProgress newCp;
+                                newCp.index = (int)m_chunks.size();
+                                newCp.startByte = splitPoint;
+                                newCp.endByte = oldEnd;
+                                newCp.downloadedBytes = 0;
+                                newCp.completed = false;
+                                m_chunks.push_back(newCp);
+
+                                {
+                                    std::lock_guard<std::mutex> rLock(m_rangeMutex);
+                                    RangeItem item = { newCp.index, newCp.startByte, newCp.endByte };
+                                    m_rangeQueue.push_back(item);
+                                }
+
+                                m_workerThreads.emplace_back(&DownloadTask::WorkerThreadFunc, this, hTargetFile);
+
+                                // Reset stagnation counter and grant a 3-second warm-up window for the new connection
+                                stagnantSeconds = 0;
+                                cooldownSeconds = 3;
+                                prevSpeed = currentSpeed;
+
+                                if (m_onStatusChanged) m_onStatusChanged(this);
+                            }
+                        }
                     }
                 }
-            } else if (curWorkers >= m_maxPartsLimit || remBytes < (3 * 1024 * 1024)) {
-                m_rampUpFinished = true;
             }
         }
 
         SaveResumeState();
 
-        // If all workers finished, break
-        if (activeWorkers.load() == 0) {
-            // Check if queue has remaining items
-            bool hasRemaining = false;
-            {
-                std::lock_guard<std::mutex> rLock(m_rangeMutex);
-                hasRemaining = !m_rangeQueue.empty();
-            }
-
-            if (hasRemaining && !m_abortFlag && !m_pauseFlag) {
-                // If all workers died due to connection limits but queue still has ranges,
-                // revive a single worker to sequentially complete the missing parts!
-                activeWorkers++;
-                m_workerThreads.emplace_back(&DownloadTask::WorkerThreadFunc, this, hTargetFile, std::ref(activeWorkers));
-                continue;
-            }
-
+        if (m_activeWorkers.load() == 0) {
             break;
         }
     }
@@ -661,9 +823,7 @@ void DownloadTask::WorkerLoop() {
     CloseHandle(hTargetFile);
     m_currentSpeed = 0;
 
-    if (m_abortFlag) return;
-
-    if (m_pauseFlag) {
+    if (m_abortFlag || m_pauseFlag) {
         SaveResumeState();
         m_status = TaskStatus::Paused;
         if (m_onStatusChanged) m_onStatusChanged(this);
@@ -675,7 +835,7 @@ void DownloadTask::WorkerLoop() {
     {
         std::lock_guard<std::mutex> lock(m_chunkMutex);
         for (const auto& cp : m_chunks) {
-            if (!cp.completed && (cp.endByte >= cp.startByte)) {
+            if (!cp.completed) {
                 allDone = false;
                 break;
             }
@@ -686,12 +846,18 @@ void DownloadTask::WorkerLoop() {
         m_status = TaskStatus::Completed;
         m_completedAt = GetCurrentTimeString();
         CleanResumeState();
+        if (m_totalBytes <= 0) {
+            m_totalBytes = m_downloadedBytes.load();
+        }
         {
             std::lock_guard<std::mutex> lock(m_chunkMutex);
             for (auto& cp : m_chunks) {
                 cp.completed = true;
                 if (cp.endByte >= cp.startByte) {
                     cp.downloadedBytes = (cp.endByte - cp.startByte) + 1;
+                } else {
+                    cp.downloadedBytes = m_downloadedBytes.load();
+                    cp.endByte = cp.downloadedBytes > 0 ? (cp.downloadedBytes - 1) : 0;
                 }
             }
         }

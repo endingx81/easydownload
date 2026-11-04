@@ -5,6 +5,7 @@
 #include <functional>
 #include <cstdint>
 #include <atomic>
+#include <mutex>
 
 namespace EasyDownload {
 
@@ -35,7 +36,8 @@ public:
         HANDLE hTargetFile,
         std::atomic<bool>& abortFlag,
         std::atomic<bool>& pauseFlag,
-        std::function<void(int64_t bytesRead)> progressCallback
+        std::function<void(int64_t bytesRead)> progressCallback,
+        std::mutex* pFileMutex = nullptr
     );
 
     static bool DownloadBuffer(
@@ -48,7 +50,9 @@ public:
 
     static std::wstring ExtractFilenameFromUrl(const std::wstring& url);
     static std::wstring ExtractFilenameFromContentDisposition(const std::wstring& cdHeader);
-    static std::wstring SanitizeFilename(const std::wstring& rawName);
+    static std::wstring SanitizeFilename(const std::wstring& rawName, size_t maxLen = 0);
+    static bool IsGenericFilename(const std::wstring& name);
+    static std::wstring ExtractTitleFromRefererUrl(const std::wstring& refererUrl);
 };
 
 } // namespace EasyDownload

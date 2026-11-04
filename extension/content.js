@@ -20,7 +20,7 @@
           action: "videoDetected",
           stream: {
             url: src,
-            title: document.title || "웹 비디오",
+            title: "", // Empty so background.js assigns top-level tab.title
             type: src.includes(".m3u8") ? "HLS" : "HTML5 Video",
             detectedAt: new Date().toLocaleTimeString()
           }
@@ -54,7 +54,7 @@
   const activeTargets = []; // { targetElement, buttonEl }
   let currentDropdown = null;
 
-  // Inject Modern Dark Glassmorphism CSS Styles
+  // Inject Modern 3D Dark Titanium Metallic & Glassmorphism CSS Styles
   function injectStyles() {
     if (document.getElementById("easydl-styles")) return;
     const style = document.createElement("style");
@@ -65,39 +65,54 @@
         to { opacity: 1; transform: translateY(0); }
       }
 
+      /* 3D Dark Titanium Hardware Metallic Button */
       .easydl-video-btn {
         position: fixed !important;
         z-index: 2147483647 !important;
-        width: 28px !important;
-        height: 28px !important;
-        background: #0f172a !important;
-        border: 1px solid rgba(56, 189, 248, 0.7) !important;
-        color: #38bdf8 !important;
-        border-radius: 6px !important;
+        width: 30px !important;
+        height: 30px !important;
+        border-radius: 7px !important;
         cursor: pointer !important;
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45) !important;
         display: none;
         align-items: center !important;
         justify-content: center !important;
         padding: 0 !important;
         margin: 0 !important;
         outline: none !important;
-        transition: background 0.15s, border-color 0.15s, transform 0.15s, box-shadow 0.15s, color 0.15s !important;
         user-select: none !important;
         box-sizing: border-box !important;
+        background: linear-gradient(145deg, #374151 0%, #1f2937 35%, #111827 75%, #0a0e17 100%) !important;
+        border: 1px solid rgba(156, 163, 175, 0.45) !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.65),
+                    inset 0 1px 1px rgba(255, 255, 255, 0.4),
+                    inset 0 -2px 3px rgba(0, 0, 0, 0.75) !important;
+        color: #38bdf8 !important;
+        transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.15s, background 0.2s, border-color 0.2s, color 0.15s !important;
       }
       .easydl-video-btn:hover {
-        background: #0284c7 !important;
-        border-color: #38bdf8 !important;
-        color: #ffffff !important;
-        transform: scale(1.1) !important;
-        box-shadow: 0 6px 18px rgba(14, 165, 233, 0.5) !important;
+        background: linear-gradient(145deg, #4b5563 0%, #283548 35%, #162030 75%, #0f172a 100%) !important;
+        border-color: rgba(56, 189, 248, 0.8) !important;
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.75),
+                    0 0 10px rgba(56, 189, 248, 0.35),
+                    inset 0 1px 1px rgba(255, 255, 255, 0.55),
+                    inset 0 -2px 3px rgba(0, 0, 0, 0.8) !important;
+        transform: scale(1.08) !important;
+        color: #7dd3fc !important;
       }
+      .easydl-video-btn:active, .easydl-video-btn.active {
+        background: linear-gradient(145deg, #111827 0%, #1f2937 60%, #374151 100%) !important;
+        box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.85),
+                    inset 0 1px 2px rgba(0, 0, 0, 0.9) !important;
+        transform: translateY(1px) scale(0.96) !important;
+      }
+
+      /* 2. Silver Chrome (Polished Aluminum 3D Metallic) */
       .easydl-video-btn svg {
         width: 15px !important;
         height: 15px !important;
         flex-shrink: 0 !important;
         pointer-events: none !important;
+        filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4)) !important;
       }
       .easydl-badge-count {
         background: rgba(56, 189, 248, 0.25) !important;
@@ -255,7 +270,7 @@
         transform: none !important;
       }
       .easydl-menu-footer {
-        padding: 7px 12px !important;
+        padding: 8px 12px !important;
         background: #0f172a !important;
         border-top: 1px solid #1e293b !important;
         font-size: 11px !important;
@@ -321,18 +336,36 @@
   }
 
   // Trigger download of a specific stream
-  function triggerDownload(stream, dlBtn) {
+  function triggerDownload(stream, dlBtn, cardTitle) {
     if (dlBtn) {
       dlBtn.textContent = "전송 중...";
       dlBtn.disabled = true;
     }
 
-    const pageTitle = document.title || "웹_비디오";
+    let pageTitle = document.title ? document.title.replace(/[\\/:*?"<>|]/g, "_").trim() : "웹_동영상";
+    let streamTitle = (cardTitle || stream.title || pageTitle).trim();
+
+    // Separate quality suffix if present
+    let qSuffix = "";
+    const qMatch = streamTitle.match(/(\s*\[[^\]]+\])/);
+    if (qMatch) {
+      qSuffix = qMatch[1];
+      streamTitle = streamTitle.replace(qMatch[1], "").trim();
+    }
+
+    // Strip site suffix, clean forbidden chars, and limit to 50 chars
+    streamTitle = streamTitle.replace(/\s*[-|_|–—]\s*(SupJav|JavDB|MissAV|YouTube|FC2|Dailymotion|Vimeo|Twitch|Bilibili|XVIDEOS|Pornhub|SpankBang)\s*$/i, "");
+    streamTitle = streamTitle.replace(/\.(html?|m3u8|mp4|ts|mkv|webm)$/i, "");
+    streamTitle = streamTitle.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim();
+    if (streamTitle.length > 50) {
+      streamTitle = streamTitle.substring(0, 50).trim();
+    }
+    streamTitle = `${streamTitle}${qSuffix}.mp4`;
 
     chrome.runtime.sendMessage({
       action: "downloadVideo",
       videoUrl: stream.url,
-      title: stream.title || pageTitle,
+      title: streamTitle,
       pageUrl: window.location.href,
       referer: window.location.href,
       type: stream.type || "video"
@@ -380,6 +413,23 @@
     closeDropdown();
 
     injectStyles();
+
+    // If on YouTube, always ensure current active video URL is 100% synchronized!
+    if (location.hostname.includes("youtube.com") || location.hostname.includes("youtu.be")) {
+      const currentUrl = location.href;
+      if (currentUrl.includes("/watch") || currentUrl.includes("/shorts/") || location.hostname.includes("youtu.be")) {
+        let ytTitle = document.title ? document.title.replace(/\s*-\s*YouTube\s*$/i, "").trim() : "YouTube 동영상";
+        detectedStreams = [{
+          url: currentUrl,
+          title: ytTitle,
+          type: "YouTube 최고 화질 (1080p/4K)",
+          quality: "YouTube",
+          size: "최고 화질"
+        }];
+        renderDropdownMenu(buttonEl);
+        return;
+      }
+    }
 
     // Query latest videos from background to make sure all 1080p/720p/480p variants are loaded
     chrome.runtime.sendMessage({ action: "getVideos" }, (res) => {
@@ -456,7 +506,21 @@
 
         const titleDiv = document.createElement("div");
         titleDiv.className = "easydl-stream-title";
-        titleDiv.textContent = s.title || document.title || "웹 동영상";
+        let displayTitle = (s.title || document.title || "웹_동영상").trim();
+        let qSuffix = "";
+        const qMatch = displayTitle.match(/(\s*\[[^\]]+\])/);
+        if (qMatch) {
+          qSuffix = qMatch[1];
+          displayTitle = displayTitle.replace(qMatch[1], "").trim();
+        }
+        displayTitle = displayTitle.replace(/\s*[-|_|–—]\s*(SupJav|JavDB|MissAV|YouTube|FC2|Dailymotion|Vimeo|Twitch|Bilibili|XVIDEOS|Pornhub|SpankBang)\s*$/i, "");
+        displayTitle = displayTitle.replace(/\.(html?|m3u8|mp4|ts|mkv|webm)$/i, "");
+        displayTitle = displayTitle.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim();
+        if (displayTitle.length > 50) {
+          displayTitle = displayTitle.substring(0, 50).trim();
+        }
+        displayTitle = `${displayTitle}${qSuffix}.mp4`;
+        titleDiv.textContent = displayTitle;
         titleDiv.title = titleDiv.textContent;
 
         const metaDiv = document.createElement("div");
@@ -491,11 +555,11 @@
 
         dlBtn.onclick = (e) => {
           e.stopPropagation();
-          triggerDownload(s, dlBtn);
+          triggerDownload(s, dlBtn, titleDiv.textContent);
         };
 
         card.onclick = (e) => {
-          triggerDownload(s, dlBtn);
+          triggerDownload(s, dlBtn, titleDiv.textContent);
         };
 
         card.appendChild(info);
@@ -603,15 +667,15 @@
       buttonEl.style.display = "inline-flex";
 
       // Positioning:
-      // STRICTLY ABOVE the video element (rect.top - 32px)
+      // STRICTLY ABOVE the video element (rect.top - 34px)
       // Never render inside the video picture
-      let top = rect.top - 32;
+      let top = rect.top - 34;
       if (top < 4 && rect.bottom > 50) {
         // If scrolled past top, clamp to 4px from viewport top
         top = 4;
       }
 
-      let left = rect.right - 34; // 28px width + 6px right margin
+      let left = rect.right - 36; // 30px width + 6px right margin
       if (left < 6) left = 6;
 
       buttonEl.style.top = Math.round(top) + "px";
@@ -660,6 +724,65 @@
     }
     scanPageTargets();
   });
+
+  // YouTube in-page video detection & real-time SPA navigation tracking
+  if (location.hostname.includes("youtube.com") || location.hostname.includes("youtu.be")) {
+    let lastYouTubeUrl = "";
+
+    function checkYouTubeVideo() {
+      const currentUrl = location.href;
+      const isVideoPage = currentUrl.includes("/watch") || currentUrl.includes("/shorts/") || location.hostname.includes("youtu.be");
+
+      if (!isVideoPage) {
+        lastYouTubeUrl = currentUrl;
+        return;
+      }
+
+      // If URL changed to a different video clip, completely reset previous cached streams!
+      if (currentUrl !== lastYouTubeUrl) {
+        detectedStreams = [];
+        lastYouTubeUrl = currentUrl;
+        chrome.runtime.sendMessage({ action: "resetTabVideos", url: currentUrl }).catch(() => {});
+      }
+
+      let ytTitle = document.title ? document.title.replace(/\s*-\s*YouTube\s*$/i, "").trim() : "YouTube 동영상";
+
+      // Re-register only the current active video
+      detectedStreams = [{
+        url: currentUrl,
+        title: ytTitle,
+        type: "YouTube 최고 화질 (1080p/4K)",
+        quality: "YouTube",
+        size: "최고 화질"
+      }];
+
+      updateAllButtonsUI();
+      scanPageTargets();
+      updatePositions();
+
+      // YouTube titles often update 200~500ms after SPA navigation
+      setTimeout(() => {
+        if (location.href === currentUrl && document.title) {
+          let updatedTitle = document.title.replace(/\s*-\s*YouTube\s*$/i, "").trim();
+          if (updatedTitle && detectedStreams.length > 0 && detectedStreams[0].url === currentUrl) {
+            detectedStreams[0].title = updatedTitle;
+          }
+        }
+      }, 500);
+    }
+
+    checkYouTubeVideo();
+    window.addEventListener("yt-navigate-finish", checkYouTubeVideo);
+    window.addEventListener("yt-page-data-updated", checkYouTubeVideo);
+    window.addEventListener("popstate", checkYouTubeVideo);
+
+    // Reliable fallback poll every 500ms in case YouTube SPA events are missed
+    setInterval(() => {
+      if (location.href !== lastYouTubeUrl) {
+        checkYouTubeVideo();
+      }
+    }, 500);
+  }
 
   // Boot DOM scan
   if (document.readyState === "loading") {

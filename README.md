@@ -22,7 +22,13 @@
    - HLS Master/Media Playlist를 파싱하여 수백 개의 `.ts` 세그먼트를 멀티스레드로 병렬 다운로드 후 단일 `.mp4`로 무손실 순차 자동 병합.
    - 복잡한 비디오 플랫폼 대응을 위한 `yt-dlp` 자동 연동 지원.
 
-4. **현대적인 Win32 네이티브 UI & 시각화**
+4. **DPI / SNI 패킷 차단 우회 엔진 (네이티브 C++ WinDivert 내장)**
+   - 별도 외부 프로세스(`goodbyedpi.exe`) 없이 EasyDownload 자체 내부 C++ 스레드로 직접 패킷 조작 및 SNI 분할(TLS Record Fragmentation) 수행.
+   - 통신사(KT, SK, LG 등)의 SNI 필터링 및 패킷 감시를 드라이버 레벨에서 실시간 우회.
+   - 해외 차단 사이트, 스트리밍 서버, 다운로드 미러의 연결 끊김이나 차단을 방지하며 기본 활성화 제공 (원클릭 ON/OFF 가능).
+   - 프로그램 종료, 재설치, 업데이트 시 WinDivert 드라이버 핸들 및 서비스를 자동 해제하여 파일 잠금이나 충돌 없이 완벽한 재설치 지원.
+
+5. **현대적인 Win32 네이티브 UI & 시각화**
    - **Per-Monitor V2 고DPI 지원**: 4K 및 다중 모니터 배율 변화 시에도 선명한 폰트와 레이아웃 유지.
    - **IDM 스타일 청크 진행률 바 (`SegmentBar`)**: 각 분할 청크의 다운로드 상태를 그래픽 바 형태로 실시간 시각화.
    - **깜빡임 없는 리스트뷰**: In-place 업데이트로 화면 깜빡임 및 스크롤 초기화 방지.
@@ -34,7 +40,7 @@
 
 ### 1. 데스크톱 앱 실행 또는 설치
 - **간편 설치**: `EasyDownload_Setup.exe` 실행 (바탕화면 및 시작 메뉴 바로가기 자동 등록)
-- **무설치 포터블**: `EasyDownload_v1.0.0_Portable.zip` 압축 해제 후 `easydownload.exe` 실행
+- **무설치 포터블**: `EasyDownload_v1.3.9_Portable.zip` 압축 해제 후 `easydownload.exe` 실행
 
 ### 2. Chrome 확장 프로그램 등록 방법 (10초 소요)
 1. Chrome 브라우저 주소창에 `chrome://extensions` 입력 후 이동.

@@ -9,7 +9,7 @@ namespace EasyDownload {
 
 static const WCHAR* DEFAULT_USER_AGENT = L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
-std::wstring HttpEngine::SanitizeFilename(const std::wstring& rawName) {
+std::wstring HttpEngine::SanitizeFilename(const std::wstring& rawName, size_t maxLen) {
     std::wstring clean = rawName;
     const std::wstring invalidChars = L"\\/:*?\"<>|";
     for (auto& ch : clean) {
@@ -22,7 +22,129 @@ std::wstring HttpEngine::SanitizeFilename(const std::wstring& rawName) {
         clean.pop_back();
     }
     if (clean.empty()) clean = L"download_file";
+
+    // Enforce maxLen on base filename if requested (preserving quality tag and extension)
+    if (maxLen > 0 && clean.length() > maxLen) {
+        size_t dot = clean.find_last_of(L'.');
+        std::wstring ext = (dot != std::wstring::npos && dot > 0) ? clean.substr(dot) : L"";
+        std::wstring base = (dot != std::wstring::npos && dot > 0) ? clean.substr(0, dot) : clean;
+
+        // Separate quality suffix if present (e.g. [1080p])
+        std::wstring qSuffix = L"";
+        size_t qOpen = base.find_last_of(L'[');
+        size_t qClose = base.find_last_of(L']');
+        if (qOpen != std::wstring::npos && qClose != std::wstring::npos && qClose > qOpen) {
+            qSuffix = base.substr(qOpen);
+            base = base.substr(0, qOpen);
+            while (!base.empty() && (base.back() == L' ' || base.back() == L'_')) base.pop_back();
+        }
+
+        if (base.length() > maxLen) {
+            base = base.substr(0, maxLen);
+            while (!base.empty() && (base.back() == L' ' || base.back() == L'_')) base.pop_back();
+        }
+        clean = base + (qSuffix.empty() ? L"" : L" " + qSuffix) + ext;
+    }
+
     return clean;
+}
+
+bool HttpEngine::IsGenericFilename(const std::wstring& name) {
+    if (name.empty()) return true;
+
+    // Remove extension for checking
+    std::wstring base = name;
+    size_t dot = base.find_last_of(L'.');
+    if (dot != std::wstring::npos) {
+        base = base.substr(0, dot);
+    }
+    // Convert to lowercase
+    std::wstring lower = base;
+    for (auto& c : lower) c = towlower(c);
+
+    // Trim whitespace and underscores
+    size_t start = lower.find_first_not_of(L" _-");
+    size_t end = lower.find_last_not_of(L" _-");
+    if (start == std::wstring::npos) return true;
+    lower = lower.substr(start, end - start + 1);
+
+    // Exact generic names
+    static const std::vector<std::wstring> genericExact = {
+        L"index", L"master", L"playlist", L"chunklist", L"video", L"stream",
+        L"videoplayback", L"download", L"download_file", L"video_stream",
+        L"동영상", L"웹 비디오", L"웹_비디오", L"동영상 스트림", L"video_download",
+        L"player", L"embed", L"media", L"output", L"manifest"
+    };
+    for (const auto& g : genericExact) {
+        if (lower == g) return true;
+    }
+
+    // Prefixes like "index-", "master-", "playlist-", "chunklist-", "stream-"
+    static const std::vector<std::wstring> genericPrefixes = {
+        L"index-", L"index_", L"master-", L"master_", L"playlist-", L"playlist_",
+        L"chunklist-", L"chunklist_", L"stream-", L"stream_", L"seg-", L"segment-"
+    };
+    for (const auto& p : genericPrefixes) {
+        if (lower.rfind(p, 0) == 0) return true;
+    }
+
+    return false;
+}
+
+std::wstring HttpEngine::ExtractTitleFromRefererUrl(const std::wstring& refererUrl) {
+    if (refererUrl.empty()) return L"";
+
+    URL_COMPONENTS urlComp = { 0 };
+    urlComp.dwStructSize = sizeof(urlComp);
+    urlComp.dwHostNameLength = (DWORD)-1;
+    urlComp.dwUrlPathLength = (DWORD)-1;
+
+    if (!WinHttpCrackUrl(refererUrl.c_str(), (DWORD)refererUrl.length(), 0, &urlComp)) {
+        return L"";
+    }
+
+    std::wstring host = (urlComp.lpszHostName && urlComp.dwHostNameLength > 0)
+        ? std::wstring(urlComp.lpszHostName, urlComp.dwHostNameLength) : L"";
+    std::wstring path = (urlComp.lpszUrlPath && urlComp.dwUrlPathLength > 0)
+        ? std::wstring(urlComp.lpszUrlPath, urlComp.dwUrlPathLength) : L"";
+
+    // Clean host (remove www.)
+    if (host.rfind(L"www.", 0) == 0) host = host.substr(4);
+    size_t dotPos = host.find(L'.');
+    std::wstring siteName = (dotPos != std::wstring::npos) ? host.substr(0, dotPos) : host;
+
+    // Clean path: remove query, get last segment
+    size_t q = path.find(L'?');
+    if (q != std::wstring::npos) path = path.substr(0, q);
+    size_t hash = path.find(L'#');
+    if (hash != std::wstring::npos) path = path.substr(0, hash);
+
+    // Strip trailing slashes
+    while (!path.empty() && (path.back() == L'/' || path.back() == L'\\')) {
+        path.pop_back();
+    }
+
+    size_t slashPos = path.find_last_of(L"/\\");
+    std::wstring lastSegment = (slashPos != std::wstring::npos) ? path.substr(slashPos + 1) : path;
+
+    // Remove .html, .htm, .php, .jsp etc.
+    static const std::vector<std::wstring> exts = { L".html", L".htm", L".php", L".jsp", L".asp", L".aspx" };
+    for (const auto& ext : exts) {
+        if (lastSegment.length() >= ext.length() &&
+            _wcsicmp(lastSegment.c_str() + lastSegment.length() - ext.length(), ext.c_str()) == 0) {
+            lastSegment = lastSegment.substr(0, lastSegment.length() - ext.length());
+            break;
+        }
+    }
+
+    std::wstring title;
+    if (!lastSegment.empty() && lastSegment != L"index" && lastSegment != L"watch" && lastSegment != L"video") {
+        title = (!siteName.empty() ? siteName + L"_" : L"") + lastSegment;
+    } else if (!siteName.empty()) {
+        title = siteName + L"_video";
+    }
+
+    return SanitizeFilename(title);
 }
 
 std::wstring HttpEngine::ExtractFilenameFromUrl(const std::wstring& url) {
@@ -85,16 +207,38 @@ std::wstring HttpEngine::ExtractFilenameFromContentDisposition(const std::wstrin
     size_t fnPos = cdHeader.find(L"filename=");
     if (fnPos != std::wstring::npos) {
         std::wstring sub = cdHeader.substr(fnPos + 9);
+        std::wstring fname;
         if (!sub.empty() && sub[0] == L'"') {
             size_t endQ = sub.find(L'"', 1);
-            if (endQ != std::wstring::npos) {
-                return SanitizeFilename(sub.substr(1, endQ - 1));
-            }
+            if (endQ != std::wstring::npos) fname = sub.substr(1, endQ - 1);
         } else {
             size_t endS = sub.find(L';');
             if (endS != std::wstring::npos) sub = sub.substr(0, endS);
-            return SanitizeFilename(sub);
+            fname = sub;
         }
+
+        // If filename contains % (URL percent-encoded UTF-8), decode it
+        if (fname.find(L'%') != std::wstring::npos) {
+            std::string utf8Str;
+            for (size_t i = 0; i < fname.length(); ++i) {
+                if (fname[i] == L'%' && i + 2 < fname.length()) {
+                    wchar_t hex[3] = { fname[i + 1], fname[i + 2], 0 };
+                    char byteVal = (char)wcstol(hex, nullptr, 16);
+                    utf8Str.push_back(byteVal);
+                    i += 2;
+                } else {
+                    utf8Str.push_back((char)fname[i]);
+                }
+            }
+            int sizeNeeded = MultiByteToWideChar(CP_UTF8, 0, utf8Str.data(), (int)utf8Str.size(), NULL, 0);
+            if (sizeNeeded > 0) {
+                std::wstring wide(sizeNeeded, 0);
+                MultiByteToWideChar(CP_UTF8, 0, utf8Str.data(), (int)utf8Str.size(), &wide[0], sizeNeeded);
+                return SanitizeFilename(wide);
+            }
+        }
+
+        return SanitizeFilename(fname);
     }
     return L"";
 }
@@ -136,11 +280,19 @@ bool HttpEngine::QueryUrlInfo(
         0
     );
     if (!hSession) return false;
+    WinHttpSetTimeouts(hSession, 5000, 10000, 10000, 15000);
 
     HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), urlComp.nPort, 0);
     if (!hConnect) {
         WinHttpCloseHandle(hSession);
         return false;
+    }
+
+    std::wstring effectiveReferer = referer;
+    if (effectiveReferer.empty()) {
+        if (url.find(L"surrit.com") != std::wstring::npos) {
+            effectiveReferer = L"https://missav123.com/";
+        }
     }
 
     DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
@@ -150,7 +302,7 @@ bool HttpEngine::QueryUrlInfo(
         L"GET",
         path.c_str(),
         NULL,
-        referer.empty() ? WINHTTP_NO_REFERER : referer.c_str(),
+        WINHTTP_NO_REFERER,
         WINHTTP_DEFAULT_ACCEPT_TYPES,
         flags
     );
@@ -160,6 +312,10 @@ bool HttpEngine::QueryUrlInfo(
         WinHttpCloseHandle(hSession);
         return false;
     }
+
+    // Enable HTTP/2 protocol flag
+    DWORD protocols = WINHTTP_PROTOCOL_FLAG_HTTP2;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &protocols, sizeof(protocols));
 
     // Ignore SSL certificate errors if needed
     if (flags & WINHTTP_FLAG_SECURE) {
@@ -182,8 +338,8 @@ bool HttpEngine::QueryUrlInfo(
     if (!cookies.empty()) {
         headers += L"Cookie: " + cookies + L"\r\n";
     }
-    if (!referer.empty()) {
-        headers += L"Referer: " + referer + L"\r\n";
+    if (!effectiveReferer.empty()) {
+        headers += L"Referer: " + effectiveReferer + L"\r\n";
     }
 
     BOOL bSend = WinHttpSendRequest(
@@ -208,6 +364,16 @@ bool HttpEngine::QueryUrlInfo(
             WINHTTP_NO_HEADER_INDEX
         );
         outInfo.statusCode = statusCode;
+
+        // Query final redirected URL if available
+        DWORD finalUrlLen = 0;
+        WinHttpQueryOption(hRequest, WINHTTP_OPTION_URL, NULL, &finalUrlLen);
+        if (GetLastError() == ERROR_INSUFFICIENT_BUFFER && finalUrlLen > 0) {
+            std::vector<WCHAR> finalUrlBuf(finalUrlLen / sizeof(WCHAR) + 1, 0);
+            if (WinHttpQueryOption(hRequest, WINHTTP_OPTION_URL, finalUrlBuf.data(), &finalUrlLen)) {
+                outInfo.finalUrl = finalUrlBuf.data();
+            }
+        }
 
         // Check if server supports Range (206 Partial Content)
         if (statusCode == 206) {
@@ -257,8 +423,13 @@ bool HttpEngine::QueryUrlInfo(
             outInfo.filename = ExtractFilenameFromContentDisposition(cdBuf);
         }
 
-        if (outInfo.filename.empty()) {
-            outInfo.filename = ExtractFilenameFromUrl(url);
+        if (outInfo.filename.empty() || IsGenericFilename(outInfo.filename)) {
+            std::wstring fnFromFinal = ExtractFilenameFromUrl(outInfo.finalUrl);
+            if (!fnFromFinal.empty() && !IsGenericFilename(fnFromFinal)) {
+                outInfo.filename = fnFromFinal;
+            } else if (outInfo.filename.empty()) {
+                outInfo.filename = ExtractFilenameFromUrl(url);
+            }
         }
     }
 
@@ -277,7 +448,8 @@ bool HttpEngine::DownloadRange(
     HANDLE hTargetFile,
     std::atomic<bool>& abortFlag,
     std::atomic<bool>& pauseFlag,
-    std::function<void(int64_t bytesRead)> progressCallback
+    std::function<void(int64_t bytesRead)> progressCallback,
+    std::mutex* pFileMutex
 ) {
     URL_COMPONENTS urlComp = { 0 };
     urlComp.dwStructSize = sizeof(urlComp);
@@ -305,11 +477,19 @@ bool HttpEngine::DownloadRange(
         0
     );
     if (!hSession) return false;
+    WinHttpSetTimeouts(hSession, 5000, 10000, 10000, 15000);
 
     HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), urlComp.nPort, 0);
     if (!hConnect) {
         WinHttpCloseHandle(hSession);
         return false;
+    }
+
+    std::wstring effectiveReferer = referer;
+    if (effectiveReferer.empty()) {
+        if (url.find(L"surrit.com") != std::wstring::npos) {
+            effectiveReferer = L"https://missav123.com/";
+        }
     }
 
     DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
@@ -318,7 +498,7 @@ bool HttpEngine::DownloadRange(
         L"GET",
         path.c_str(),
         NULL,
-        referer.empty() ? WINHTTP_NO_REFERER : referer.c_str(),
+        WINHTTP_NO_REFERER,
         WINHTTP_DEFAULT_ACCEPT_TYPES,
         flags
     );
@@ -328,6 +508,10 @@ bool HttpEngine::DownloadRange(
         WinHttpCloseHandle(hSession);
         return false;
     }
+
+    // Enable HTTP/2 protocol flag
+    DWORD protocols = WINHTTP_PROTOCOL_FLAG_HTTP2;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &protocols, sizeof(protocols));
 
     if (flags & WINHTTP_FLAG_SECURE) {
         DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
@@ -348,8 +532,8 @@ bool HttpEngine::DownloadRange(
     if (!cookies.empty()) {
         headers += L"Cookie: " + cookies + L"\r\n";
     }
-    if (!referer.empty()) {
-        headers += L"Referer: " + referer + L"\r\n";
+    if (!effectiveReferer.empty()) {
+        headers += L"Referer: " + effectiveReferer + L"\r\n";
     }
 
     BOOL bSend = WinHttpSendRequest(
@@ -398,7 +582,15 @@ bool HttpEngine::DownloadRange(
                 ov.OffsetHigh = (DWORD)((currentFileOffset >> 32) & 0xFFFFFFFF);
 
                 DWORD bytesWritten = 0;
-                if (!WriteFile(hTargetFile, buffer.data(), bytesRead, &bytesWritten, &ov)) {
+                BOOL writeOk = FALSE;
+                if (pFileMutex) {
+                    std::lock_guard<std::mutex> fLock(*pFileMutex);
+                    writeOk = WriteFile(hTargetFile, buffer.data(), bytesRead, &bytesWritten, &ov);
+                } else {
+                    writeOk = WriteFile(hTargetFile, buffer.data(), bytesRead, &bytesWritten, &ov);
+                }
+
+                if (!writeOk) {
                     success = false;
                     break;
                 }
@@ -456,11 +648,19 @@ bool HttpEngine::DownloadBuffer(
         0
     );
     if (!hSession) return false;
+    WinHttpSetTimeouts(hSession, 5000, 10000, 10000, 15000);
 
     HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), urlComp.nPort, 0);
     if (!hConnect) {
         WinHttpCloseHandle(hSession);
         return false;
+    }
+
+    std::wstring effectiveReferer = referer;
+    if (effectiveReferer.empty()) {
+        if (url.find(L"surrit.com") != std::wstring::npos) {
+            effectiveReferer = L"https://missav123.com/";
+        }
     }
 
     DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
@@ -469,7 +669,7 @@ bool HttpEngine::DownloadBuffer(
         L"GET",
         path.c_str(),
         NULL,
-        referer.empty() ? WINHTTP_NO_REFERER : referer.c_str(),
+        WINHTTP_NO_REFERER,
         WINHTTP_DEFAULT_ACCEPT_TYPES,
         flags
     );
@@ -479,6 +679,10 @@ bool HttpEngine::DownloadBuffer(
         WinHttpCloseHandle(hSession);
         return false;
     }
+
+    // Enable HTTP/2 protocol flag
+    DWORD protocols = WINHTTP_PROTOCOL_FLAG_HTTP2;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &protocols, sizeof(protocols));
 
     if (flags & WINHTTP_FLAG_SECURE) {
         DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
@@ -495,8 +699,8 @@ bool HttpEngine::DownloadBuffer(
     if (!cookies.empty()) {
         headers += L"Cookie: " + cookies + L"\r\n";
     }
-    if (!referer.empty()) {
-        headers += L"Referer: " + referer + L"\r\n";
+    if (!effectiveReferer.empty()) {
+        headers += L"Referer: " + effectiveReferer + L"\r\n";
     }
 
     BOOL bSend = WinHttpSendRequest(

@@ -18,6 +18,7 @@ struct StreamQuality {
 struct HlsPlaylistInfo {
     bool isMaster{ false };
     std::vector<StreamQuality> qualities;
+    std::wstring initSegmentUrl; // Fragmented MP4 / CMAF initialization segment URL (#EXT-X-MAP)
     std::vector<std::wstring> segmentUrls;
     double totalDuration{ 0.0 };
 };
@@ -32,6 +33,8 @@ public:
         std::atomic<bool>& abortFlag
     );
 
+    typedef std::function<void(int workerIdx, int workerCompleted, int workerTotal, int completedSegments, int totalSegments, int64_t bytesRead)> HlsProgressCallback;
+
     static bool DownloadHlsStream(
         const std::wstring& playlistUrl,
         const std::wstring& targetFilePath,
@@ -40,15 +43,21 @@ public:
         int maxWorkers,
         std::atomic<bool>& abortFlag,
         std::atomic<bool>& pauseFlag,
-        std::function<void(int completedSegments, int totalSegments, int64_t bytesRead)> progressCallback
+        HlsProgressCallback progressCallback
     );
 
     static bool IsYtDlpAvailable(std::wstring& outPath);
+    static std::wstring FindFfmpegLocation();
+    static void UpdateYtDlpInBackground();
+    static std::wstring GetVideoTitleWithYtDlp(const std::wstring& videoPageUrl);
+
+    typedef std::function<void(int percent, int64_t downloadedBytes, int64_t totalBytes, int64_t speedBytesPerSec)> YtDlpProgressCallback;
+
     static bool DownloadWithYtDlp(
         const std::wstring& videoPageUrl,
         const std::wstring& targetFilePath,
         std::atomic<bool>& abortFlag,
-        std::function<void(int percent, const std::wstring& speedStr)> progressCallback
+        YtDlpProgressCallback progressCallback
     );
 
 private:

@@ -45,6 +45,9 @@ private:
     void OnShowSelectedInfo();
     void OnSettings();
     void OnInstallExtension();
+    void OnToggleDpiBypass();
+    void UpdateDpiBypassUi();
+    void OnToggleChromeDoh();
 
     HWND m_hWnd{ NULL };
     HWND m_hToolbar{ NULL };

@@ -163,8 +163,20 @@ INT_PTR CALLBACK DownloadProgressDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM
             std::wstring statusText = L"상태: " + task->GetStatusString();
             SetDlgItemTextW(hDlg, IDC_LBL_PROG_STATUS, statusText.c_str());
 
-            std::wstring partsText = L"연결 분할: " + std::to_wstring(task->GetNumParts()) + L"개";
-            SetDlgItemTextW(hDlg, IDC_LBL_PROG_PARTS, partsText.c_str());
+            int active = task->GetActiveWorkersCount();
+            std::wstring concurrentText;
+            if (status == TaskStatus::Downloading) {
+                concurrentText = L"분할 연결: " + std::to_wstring(active > 0 ? active : 1) + L"개 (최대 12개)";
+            } else if (status == TaskStatus::Connecting) {
+                concurrentText = L"분할 연결: 연결 중";
+            } else if (status == TaskStatus::Completed) {
+                concurrentText = L"분할 연결: 완료";
+            } else if (status == TaskStatus::Paused) {
+                concurrentText = L"분할 연결: 중단됨";
+            } else {
+                concurrentText = L"분할 연결: -";
+            }
+            SetDlgItemTextW(hDlg, IDC_LBL_PROG_PARTS, concurrentText.c_str());
 
             // Size label
             std::wstring sizeText;
@@ -186,24 +198,24 @@ INT_PTR CALLBACK DownloadProgressDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM
             if (status == TaskStatus::Downloading) {
                 SetDlgItemTextW(hDlg, IDC_LBL_PROG_SPEED, (L"전송 속도: " + FormatSpeed(speed)).c_str());
                 SetDlgItemTextW(hDlg, IDC_LBL_PROG_TIME, (L"남은 시간: " + FormatEta(task->GetRemainingSeconds())).c_str());
-                SetDlgItemTextW(hDlg, IDC_BTN_PROG_PAUSE, L"일시정지");
+                SetDlgItemTextW(hDlg, IDC_BTN_PROG_PAUSE, L"중단");
                 ShowWindow(GetDlgItem(hDlg, IDC_BTN_PROG_PAUSE), SW_SHOW);
                 EnableWindow(GetDlgItem(hDlg, IDC_BTN_PROG_PAUSE), TRUE);
-                SetDlgItemTextW(hDlg, IDC_BTN_PROG_CANCEL, L"취소");
+                SetDlgItemTextW(hDlg, IDC_BTN_PROG_CANCEL, L"닫기");
             } else if (status == TaskStatus::Connecting) {
                 SetDlgItemTextW(hDlg, IDC_LBL_PROG_SPEED, L"연결 중...");
                 SetDlgItemTextW(hDlg, IDC_LBL_PROG_TIME, L"대기 중");
-                SetDlgItemTextW(hDlg, IDC_BTN_PROG_PAUSE, L"일시정지");
+                SetDlgItemTextW(hDlg, IDC_BTN_PROG_PAUSE, L"중단");
                 ShowWindow(GetDlgItem(hDlg, IDC_BTN_PROG_PAUSE), SW_SHOW);
                 EnableWindow(GetDlgItem(hDlg, IDC_BTN_PROG_PAUSE), TRUE);
-                SetDlgItemTextW(hDlg, IDC_BTN_PROG_CANCEL, L"취소");
+                SetDlgItemTextW(hDlg, IDC_BTN_PROG_CANCEL, L"닫기");
             } else if (status == TaskStatus::Paused) {
                 SetDlgItemTextW(hDlg, IDC_LBL_PROG_SPEED, L"전송 속도: -");
-                SetDlgItemTextW(hDlg, IDC_LBL_PROG_TIME, L"남은 시간: 일시정지됨");
-                SetDlgItemTextW(hDlg, IDC_BTN_PROG_PAUSE, L"다시 시작");
+                SetDlgItemTextW(hDlg, IDC_LBL_PROG_TIME, L"남은 시간: 중단됨");
+                SetDlgItemTextW(hDlg, IDC_BTN_PROG_PAUSE, L"재시작");
                 ShowWindow(GetDlgItem(hDlg, IDC_BTN_PROG_PAUSE), SW_SHOW);
                 EnableWindow(GetDlgItem(hDlg, IDC_BTN_PROG_PAUSE), TRUE);
-                SetDlgItemTextW(hDlg, IDC_BTN_PROG_CANCEL, L"취소");
+                SetDlgItemTextW(hDlg, IDC_BTN_PROG_CANCEL, L"닫기");
             } else if (status == TaskStatus::Completed) {
                 SetDlgItemTextW(hDlg, IDC_LBL_PROG_SPEED, L"전송 완료");
                 SetDlgItemTextW(hDlg, IDC_LBL_PROG_TIME, L"완료됨");
@@ -256,15 +268,7 @@ INT_PTR CALLBACK DownloadProgressDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM
             }
             return TRUE;
         }
-        case IDC_BTN_PROG_CANCEL: {
-            if (task) {
-                if (task->GetStatus() != TaskStatus::Completed && task->GetStatus() != TaskStatus::Error) {
-                    task->Cancel();
-                }
-            }
-            DestroyWindow(hDlg);
-            return TRUE;
-        }
+        case IDC_BTN_PROG_CANCEL:
         case IDC_BTN_PROG_HIDE:
         case IDCANCEL: {
             // Close progress dialog window; download continues in main dashboard
