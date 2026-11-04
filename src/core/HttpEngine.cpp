@@ -449,7 +449,9 @@ bool HttpEngine::DownloadRange(
     std::atomic<bool>& abortFlag,
     std::atomic<bool>& pauseFlag,
     std::function<void(int64_t bytesRead)> progressCallback,
-    std::mutex* pFileMutex
+    std::mutex* pFileMutex,
+    const std::atomic<int64_t>* pDynamicEndByte,
+    std::atomic<bool>* pServerLimitHit
 ) {
     URL_COMPONENTS urlComp = { 0 };
     urlComp.dwStructSize = sizeof(urlComp);
@@ -553,14 +555,21 @@ bool HttpEngine::DownloadRange(
         WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
             WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &dwSize, WINHTTP_NO_HEADER_INDEX);
 
+        if (statusCode == 429 || statusCode == 403 || statusCode == 503) {
+            if (pServerLimitHit) {
+                pServerLimitHit->store(true);
+            }
+        }
+
         if (statusCode == 200 || statusCode == 206) {
             std::vector<char> buffer(64 * 1024);
             int64_t currentFileOffset = startByte >= 0 ? startByte : 0;
 
             while (!abortFlag && !pauseFlag) {
                 DWORD bytesToRead = (DWORD)buffer.size();
-                if (endByte >= startByte) {
-                    int64_t remaining = (endByte - currentFileOffset) + 1;
+                int64_t targetEnd = pDynamicEndByte ? pDynamicEndByte->load() : endByte;
+                if (targetEnd >= startByte) {
+                    int64_t remaining = (targetEnd - currentFileOffset) + 1;
                     if (remaining <= 0) {
                         success = true;
                         break;
@@ -573,7 +582,8 @@ bool HttpEngine::DownloadRange(
                 DWORD bytesRead = 0;
                 if (!WinHttpReadData(hRequest, buffer.data(), bytesToRead, &bytesRead) || bytesRead == 0) {
                     // EOF reached
-                    success = (endByte < startByte) || (currentFileOffset > endByte);
+                    int64_t targetEndFinal = pDynamicEndByte ? pDynamicEndByte->load() : endByte;
+                    success = (targetEndFinal < startByte) || (currentFileOffset > targetEndFinal);
                     break;
                 }
 
@@ -600,7 +610,8 @@ bool HttpEngine::DownloadRange(
                     progressCallback(bytesRead);
                 }
 
-                if (endByte >= startByte && currentFileOffset > endByte) {
+                int64_t targetEndCheck = pDynamicEndByte ? pDynamicEndByte->load() : endByte;
+                if (targetEndCheck >= startByte && currentFileOffset > targetEndCheck) {
                     success = true;
                     break;
                 }

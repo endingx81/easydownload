@@ -45,6 +45,11 @@ DownloadTask::DownloadTask(
     m_id = GenerateGuid();
     m_createdAt = GetCurrentTimeString();
 
+    for (int i = 0; i < 32; ++i) {
+        m_chunkDynamicEnds[i].store(-1);
+        m_chunkBytesReceivedInWindow[i].store(0);
+    }
+
     WCHAR fname[MAX_PATH] = { 0 };
     wcscpy_s(fname, m_savePath.c_str());
     PathStripPathW(fname);
@@ -234,6 +239,10 @@ void DownloadTask::WorkerThreadFunc(HANDLE hTargetFile) {
         const int maxRetries = 5;
 
         while ((taskRange.endByte < 0 || currentOffset <= taskRange.endByte) && !m_abortFlag && !m_pauseFlag) {
+            const std::atomic<int64_t>* pDynEnd = (taskRange.chunkIndex >= 0 && taskRange.chunkIndex < 32)
+                ? &m_chunkDynamicEnds[taskRange.chunkIndex]
+                : nullptr;
+
             bool ok = HttpEngine::DownloadRange(
                 m_url,
                 m_referer,
@@ -247,17 +256,23 @@ void DownloadTask::WorkerThreadFunc(HANDLE hTargetFile) {
                     currentOffset += bytesRead;
                     m_downloadedBytes += bytesRead;
                     m_bytesSinceLastSpeedCalc += bytesRead;
+                    if (taskRange.chunkIndex >= 0 && taskRange.chunkIndex < 32) {
+                        m_chunkBytesReceivedInWindow[taskRange.chunkIndex] += bytesRead;
+                    }
                     {
                         std::lock_guard<std::mutex> lock(m_chunkMutex);
                         if (taskRange.chunkIndex >= 0 && taskRange.chunkIndex < (int)m_chunks.size()) {
                             m_chunks[taskRange.chunkIndex].downloadedBytes += bytesRead;
-                            if (taskRange.endByte >= 0 && m_chunks[taskRange.chunkIndex].startByte + m_chunks[taskRange.chunkIndex].downloadedBytes > m_chunks[taskRange.chunkIndex].endByte) {
+                            int64_t chunkEnd = m_chunks[taskRange.chunkIndex].endByte;
+                            if (chunkEnd >= 0 && m_chunks[taskRange.chunkIndex].startByte + m_chunks[taskRange.chunkIndex].downloadedBytes > chunkEnd) {
                                 m_chunks[taskRange.chunkIndex].completed = true;
                             }
                         }
                     }
                 },
-                &m_fileWriteMutex
+                &m_fileWriteMutex,
+                pDynEnd,
+                &m_serverLimitHit
             );
 
             if (ok || (taskRange.endByte >= 0 && currentOffset > taskRange.endByte)) {
@@ -640,6 +655,11 @@ void DownloadTask::WorkerLoop() {
                 cp.completed = false;
                 m_chunks.push_back(cp);
 
+                if (i < 32) {
+                    m_chunkDynamicEnds[i].store(cp.endByte);
+                    m_chunkBytesReceivedInWindow[i].store(0);
+                }
+
                 RangeItem item = { i, cp.startByte, cp.endByte };
                 m_rangeQueue.push_back(item);
             }
@@ -647,6 +667,10 @@ void DownloadTask::WorkerLoop() {
         } else {
             std::lock_guard<std::mutex> lock(m_chunkMutex);
             for (auto& cp : m_chunks) {
+                if (cp.index < 32) {
+                    m_chunkDynamicEnds[cp.index].store(cp.endByte);
+                    m_chunkBytesReceivedInWindow[cp.index].store(0);
+                }
                 if (!cp.completed) {
                     int64_t start = cp.startByte + cp.downloadedBytes;
                     if (start <= cp.endByte) {
@@ -705,6 +729,12 @@ void DownloadTask::WorkerLoop() {
     int stagnantSeconds = 0;
     int cooldownSeconds = 3; // Initial 3s warm-up for initial connections to ramp up
 
+    int lastAddedChunkIdx = -1;
+    bool awaitingEval = false;
+    int evalCountdown = 0;
+    int64_t speedBeforeAdd = 0;
+    bool splitHalted = false; // Set to true if server limits connections or new connection is dead
+
     // Monitoring loop
     while (!m_abortFlag && !m_pauseFlag) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -719,43 +749,77 @@ void DownloadTask::WorkerLoop() {
         }
 
         // Smart Adaptive Acceleration: Ramp up connections to maximize final speed,
-        // but wait for speed to stabilize and avoid splitting while speed is actively climbing or line is saturated.
-        if (adaptive && useRange && !m_abortFlag && !m_pauseFlag) {
+        // but verify that each newly added connection is actually receiving data before adding more!
+        if (adaptive && useRange && !m_abortFlag && !m_pauseFlag && !splitHalted) {
             adaptiveCheckTicks++;
             if (adaptiveCheckTicks >= 4) { // every ~1000ms
                 adaptiveCheckTicks = 0;
                 int64_t currentSpeed = m_currentSpeed.load();
 
-                // If already at or above saturation threshold, halt further splitting
-                if (currentSpeed >= saturationThreshold) {
+                // 1. Did server reject connections with 429/403/503?
+                if (m_serverLimitHit.load()) {
+                    splitHalted = true;
+                }
+                // 2. Bandwidth saturation threshold reached?
+                else if (currentSpeed >= saturationThreshold) {
                     stagnantSeconds = 0;
                     prevSpeed = currentSpeed;
-                } else if (cooldownSeconds > 0) {
-                    // Warm-up / stabilization cooldown after initial start or adding a connection
+                }
+                // 3. Evaluation of previously added connection
+                else if (awaitingEval) {
+                    evalCountdown--;
+                    if (evalCountdown <= 0) {
+                        awaitingEval = false;
+                        cooldownSeconds = 2; // short stabilization cooldown
+
+                        int64_t newChunkBytes = 0;
+                        if (lastAddedChunkIdx >= 0 && lastAddedChunkIdx < 32) {
+                            newChunkBytes = m_chunkBytesReceivedInWindow[lastAddedChunkIdx].load();
+                        }
+
+                        // Check if server rejected or new worker received 0 bytes
+                        if (newChunkBytes == 0 || m_serverLimitHit.load()) {
+                            // The server refused or failed this extra connection!
+                            // Immediately halt further connection attempts!
+                            splitHalted = true;
+                        }
+                        // Check if total speed dropped drastically (> 20% drop from before adding)
+                        else if (speedBeforeAdd > 0 && currentSpeed < (int64_t)(speedBeforeAdd * 0.8)) {
+                            splitHalted = true;
+                        }
+                        else {
+                            // New connection is successfully downloading bytes (even at 10KB/s)!
+                            // Allow further scaling!
+                            prevSpeed = currentSpeed;
+                            stagnantSeconds = 0;
+                        }
+                    }
+                }
+                // 4. Cooldown
+                else if (cooldownSeconds > 0) {
                     cooldownSeconds--;
                     prevSpeed = currentSpeed;
-                } else {
-                    // Check if speed is actively climbing
+                }
+                // 5. Check if accelerating or stagnant
+                else {
                     bool isAccelerating = false;
                     if (prevSpeed > 0) {
                         int64_t gain = currentSpeed - prevSpeed;
-                        // Speed increased by >= 5% and gained at least 200KB/s
-                        if (gain > (int64_t)(prevSpeed * 0.05) && gain > 200 * 1024) {
+                        if (gain > (int64_t)(prevSpeed * 0.05)) {
                             isAccelerating = true;
                         }
                     }
 
                     if (isAccelerating) {
-                        // Current connections are still actively ramping up! Keep letting them accelerate.
                         stagnantSeconds = 0;
                         prevSpeed = currentSpeed;
                     } else {
-                        // Speed has plateaued or fluctuated without significant gain
                         stagnantSeconds++;
                         prevSpeed = currentSpeed;
 
-                        // Only add connection when speed has plateaued for at least 2 consecutive seconds
-                        if (stagnantSeconds >= 2 && (int)m_chunks.size() < maxParts) {
+                        if (stagnantSeconds >= 2 && (int)m_chunks.size() < maxParts && !splitHalted) {
+                            bool workersHealthy = (m_activeWorkers.load() > 0);
+
                             std::lock_guard<std::mutex> lock(m_chunkMutex);
                             int largestIdx = -1;
                             int64_t maxRemaining = 0;
@@ -764,28 +828,37 @@ void DownloadTask::WorkerLoop() {
                                 if (!m_chunks[i].completed) {
                                     int64_t curHead = m_chunks[i].startByte + m_chunks[i].downloadedBytes;
                                     int64_t rem = m_chunks[i].endByte - curHead;
-                                    if (rem > maxRemaining && rem >= (4 * 1024 * 1024)) {
+                                    if (rem > maxRemaining && rem >= (6 * 1024 * 1024)) {
                                         maxRemaining = rem;
                                         largestIdx = (int)i;
                                     }
                                 }
                             }
 
-                            if (largestIdx >= 0 && (int)m_chunks.size() < maxParts) {
+                            if (workersHealthy && largestIdx >= 0 && (int)m_chunks.size() < maxParts) {
                                 int64_t curHead = m_chunks[largestIdx].startByte + m_chunks[largestIdx].downloadedBytes;
                                 int64_t oldEnd = m_chunks[largestIdx].endByte;
                                 int64_t half = (oldEnd - curHead) / 2;
                                 int64_t splitPoint = curHead + half;
 
                                 m_chunks[largestIdx].endByte = splitPoint - 1;
+                                if (largestIdx < 32) {
+                                    m_chunkDynamicEnds[largestIdx].store(splitPoint - 1);
+                                }
 
+                                int newIdx = (int)m_chunks.size();
                                 ChunkProgress newCp;
-                                newCp.index = (int)m_chunks.size();
+                                newCp.index = newIdx;
                                 newCp.startByte = splitPoint;
                                 newCp.endByte = oldEnd;
                                 newCp.downloadedBytes = 0;
                                 newCp.completed = false;
                                 m_chunks.push_back(newCp);
+
+                                if (newIdx < 32) {
+                                    m_chunkDynamicEnds[newIdx].store(oldEnd);
+                                    m_chunkBytesReceivedInWindow[newIdx].store(0);
+                                }
 
                                 {
                                     std::lock_guard<std::mutex> rLock(m_rangeMutex);
@@ -795,9 +868,11 @@ void DownloadTask::WorkerLoop() {
 
                                 m_workerThreads.emplace_back(&DownloadTask::WorkerThreadFunc, this, hTargetFile);
 
-                                // Reset stagnation counter and grant a 3-second warm-up window for the new connection
+                                lastAddedChunkIdx = newIdx;
+                                speedBeforeAdd = currentSpeed;
+                                awaitingEval = true;
+                                evalCountdown = 4; // 4 seconds probation window
                                 stagnantSeconds = 0;
-                                cooldownSeconds = 3;
                                 prevSpeed = currentSpeed;
 
                                 if (m_onStatusChanged) m_onStatusChanged(this);

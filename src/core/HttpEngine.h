@@ -37,7 +37,9 @@ public:
         std::atomic<bool>& abortFlag,
         std::atomic<bool>& pauseFlag,
         std::function<void(int64_t bytesRead)> progressCallback,
-        std::mutex* pFileMutex = nullptr
+        std::mutex* pFileMutex = nullptr,
+        const std::atomic<int64_t>* pDynamicEndByte = nullptr,
+        std::atomic<bool>* pServerLimitHit = nullptr
     );
 
     static bool DownloadBuffer(

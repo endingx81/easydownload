@@ -106,6 +106,10 @@ private:
     std::vector<ChunkProgress> m_chunks;
     std::mutex m_chunkMutex;
 
+    std::atomic<int64_t> m_chunkDynamicEnds[32];
+    std::atomic<int64_t> m_chunkBytesReceivedInWindow[32];
+    std::atomic<bool> m_serverLimitHit{ false };
+
     std::deque<RangeItem> m_rangeQueue;
     std::mutex m_rangeMutex;
 
