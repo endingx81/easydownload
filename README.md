@@ -22,10 +22,11 @@
    - HLS Master/Media Playlist를 파싱하여 수백 개의 `.ts` 세그먼트를 멀티스레드로 병렬 다운로드 후 단일 `.mp4`로 무손실 순차 자동 병합.
    - 복잡한 비디오 플랫폼 대응을 위한 `yt-dlp` 자동 연동 지원.
 
-4. **DPI / SNI 패킷 차단 우회 엔진 (네이티브 C++ WinDivert 내장)**
-   - 별도 외부 프로세스(`goodbyedpi.exe`) 없이 EasyDownload 자체 내부 C++ 스레드로 직접 패킷 조작 및 SNI 분할(TLS Record Fragmentation) 수행.
-   - 통신사(KT, SK, LG 등)의 SNI 필터링 및 패킷 감시를 드라이버 레벨에서 실시간 우회.
-   - 해외 차단 사이트, 스트리밍 서버, 다운로드 미러의 연결 끊김이나 차단을 방지하며 기본 활성화 제공 (원클릭 ON/OFF 가능).
+4. **DPI / SNI 차단 우회 및 통신사 DNS 오염 원천 방어 엔진 (GoodbyeDPI -5 규격 완전 호환)**
+   - 별도 외부 프로세스(`goodbyedpi.exe`) 없이 EasyDownload 자체 내부 C++ 스레드로 직접 패킷 조작 및 SNI 2바이트 역순 분할(TLS Record Fragmentation) 수행.
+   - 통신사(KT, SK, LG 등)의 UDP 53 DNS 오염 및 하이재킹을 WinDivert 레벨에서 가로채어 비표준 안전 DNS(`77.88.8.8:1253` 등)로 실시간 리다이렉션하여 첫 접속 시 0초 만에 100% 즉시 로딩 보장.
+   - 우회 시작 즉시 Windows 로컬 DNS 캐시(`DnsFlushResolverCache`)를 자동 소거하여 이전 오염/실패 캐시로 인한 새로고침 지연 완전 해결.
+   - 통신사 감시 장비의 위조 RST 패킷 자동 차단 및 QUIC(UDP 443) 즉시 차단으로 브라우저가 대기 없이 TCP HTTPS로 직행하도록 유도.
    - 프로그램 종료, 재설치, 업데이트 시 WinDivert 드라이버 핸들 및 서비스를 자동 해제하여 파일 잠금이나 충돌 없이 완벽한 재설치 지원.
 
 5. **현대적인 Win32 네이티브 UI & 시각화**
@@ -40,7 +41,7 @@
 
 ### 1. 데스크톱 앱 실행 또는 설치
 - **간편 설치**: `EasyDownload_Setup.exe` 실행 (바탕화면 및 시작 메뉴 바로가기 자동 등록)
-- **무설치 포터블**: `EasyDownload_v1.4.0_Portable.zip` 압축 해제 후 `easydownload.exe` 실행
+- **무설치 포터블**: `EasyDownload_v1.4.2_Portable.zip` 압축 해제 후 `easydownload.exe` 실행
 
 ### 2. Chrome 확장 프로그램 등록 방법 (10초 소요)
 1. Chrome 브라우저 주소창에 `chrome://extensions` 입력 후 이동.

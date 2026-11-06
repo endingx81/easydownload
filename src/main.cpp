@@ -15,6 +15,12 @@
 #pragma comment(lib, "ole32.lib")
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
+    // 0. Ensure application directory is searched for DLLs (e.g. WinDivert.dll)
+    WCHAR exeDir[MAX_PATH] = { 0 };
+    GetModuleFileNameW(NULL, exeDir, MAX_PATH);
+    PathRemoveFileSpecW(exeDir);
+    SetDllDirectoryW(exeDir);
+
     // 1. Single Instance Check
     HANDLE hMutex = CreateMutexW(NULL, FALSE, L"Local\\EasyDownload_SingleInstance_Mutex");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {

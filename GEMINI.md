@@ -42,7 +42,9 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
   - **방지 원칙 (표준 배포 패키징 파이프라인)**:
     1. **단일 설치 파일 빌더 절대 경로**:  
        `& "D:\coding\visualstudio\easyinstall\bin\Release\easyinstall.exe" -i "<입력_바이너리_또는_폴더>" -o "<출력경로>\Setup.exe" -n "<프로그램명>" -v "<버전>" -p "purestory" -m "<메인_exe명>"`  
-       *(예: `& "D:\coding\visualstudio\easyinstall\bin\Release\easyinstall.exe" -i "D:\coding\visualstudio\easydownload\bin\Release\easydownload.exe" -o "D:\coding\visualstudio\easydownload\EasyDownload_Setup.exe" -n "easydownload" -v "1.00" -p "purestory" -m "easydownload.exe"`)*
+       *(예: `& "D:\coding\visualstudio\easyinstall\bin\Release\easyinstall.exe" -i "D:\coding\visualstudio\easydownload\bin\Release" -o "D:\coding\visualstudio\easydownload\EasyDownload_Setup.exe" -n "EasyDownload" -v "1.4.2" -p "purestory" -m "easydownload.exe"`)*
+       > [!CAUTION]
+       > **단일 파일 vs 폴더 패키징 맹점 방지**: DLL(`WinDivert.dll`), 드라이버(`WinDivert64.sys`), 확장 프로그램 등 동적 의존 파일이 있는 프로젝트에서 `-i`에 단일 `exe` 경로만 전달하면 부속 파일들이 패키징에서 전부 누락됨. 이로 인해 설치 후 기존 구버전 DLL이 잔존하거나 DLL이 없어 `프로시저 시작 지점(WinDivertShutdown 등)을 찾을 수 없습니다` 오류가 발생함. 따라서 반드시 **바이너리 전체가 빌드된 폴더(`bin\Release`)를 `-i`로 전달**하여 모든 종속 파일이 100% 동봉되도록 할 것!
     2. **무설치 포터블 압축 아카이브 생성**:  
        `powershell -Command "Compress-Archive -Path '<바이너리_경로>' -DestinationPath '<출력경로>\<프로그램명>_portable.zip' -Force"`
     3. 설치 파일 생성 요구 시 타사 도구(`iscc`, `makensis` 등)를 일절 찾지 말고, 위 `easyinstall.exe` 절대 경로를 이용하여 즉시 1초 만에 원스톱으로 빌드할 것.
@@ -566,6 +568,40 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
      - 새 워커가 평가 기간(4초) 동안 데이터를 전혀 받지 못하거나 서버 차단 코드를 수신하면, 서버의 동시 접속 한계에 도달한 것으로 확정하고 **추가 연결 증설 시도를 즉시 영구 중단(`splitHalted = true`)**할 것.
   3. **청크 동적 분할 시 기존 활성 워커의 실시간 종료 지점 동기화 (`DynamicEndByte`)**:
      - 청크를 반으로 쪼갤 때 기존 워커의 종료 오프셋을 `std::atomic<int64_t>`로 실시간 갱신하여, 기존 워커가 `splitPoint - 1`에서 즉시 다운로드를 멈추고 새 워커에게 뒷부분을 넘겨주도록 하여 중복 데이터 수신 및 서버 연결 충돌을 원천 차단할 것.
+
+### 🌐 통신사 DNS 오염(DNS Poisoning) 우회 및 GoodbyeDPI -5 규격 완벽 일치 원칙
+- **실제 현상 및 원인**:
+  - `mrjav.net` 등 KCSC 차단 사이트 접속 시, 오리지널 GoodbyeDPI(`-5 --dns-addr 77.88.8.8 --dns-port 1253`)는 첫 클릭 시 0초 만에 바로 열리는 반면, EasyDownload의 DPI 우회 기능은 사이트가 바로 열리지 않고 수차례 새로고침(F5)을 해야만 열리는 심각한 성능 격차가 발생함.
+  - **원인 분석**:
+    1. **UDP 53 DNS 리다이렉션 누락**: 국내 통신사(KT/SK/LG)는 차단 사이트에 대해 UDP 53 DNS 질의를 가로채어 가짜 IP를 반환하거나 응답을 유실시킴. GoodbyeDPI는 WinDivert로 UDP 53 패킷을 가로채어 비표준 포트인 `77.88.8.8:1253`으로 전송하여 감시를 100% 회피함. 반면 EasyDownload는 UDP 53을 처리하지 않고 크롬 DoH 레지스트리에만 의존하여 윈도우 기본 DNS가 오염된 채 방치됨.
+    2. **Windows DNS 캐시 플러시 부재**: 프로그램 시작 전 접속 시도로 인해 PC의 Windows DNS 리졸버에 저장된 오염/실패 캐시를 비우지 않아, TTL이 만료될 때까지 F5를 반복해야 했음.
+    3. **비표준 분할 오프셋 및 1ms 지연**: 도메인 중간(`sniOffset + 2`) 분할 및 `sleep_for(1ms)`로 인해 DPI 장비가 TLS 헤더를 포착하거나 패킷 루프에 지연이 발생함.
+- **방지 원칙**:
+  1. **WinDivert 기반 UDP 53 DNS 양방향 리다이렉션 필수 구현**:
+     - WinDivert 필터에 `(outbound && udp.DstPort == 53)` 및 `(inbound && udp.SrcPort == 1253)`를 반드시 포함할 것.
+     - 아웃바운드 UDP 53 질의 인입 시 클라이언트 주소/포트를 키로 원본 DNS 목적지를 트래커에 기록하고, 패킷의 목적지를 안전 비표준 DNS(`77.88.8.8:1253` / IPv6 `2a02:6b8::feed:0ff:1253`)로 변조 후 체크섬을 재계산하여 전송할 것.
+     - 인바운드 UDP 1253 응답 인입 시 트래커를 조회하여 소스 IP를 원래의 DNS 주소로, 소스 포트를 53으로 완벽 복원하여 체크섬 재계산 후 윈도우에 전달할 것.
+  2. **DPI 엔진 기동 시 Windows DNS 캐시 즉시 플러시 (`DnsFlushResolverCache`)**:
+     - `DpiBypassManager::Start()` 호출 즉시 `dnsapi.dll`의 `DnsFlushResolverCache()`를 호출하여 PC에 남아있던 오염된 DNS 캐시를 0초 만에 완전히 날려버릴 것.
+  3. **GoodbyeDPI -5 표준 규격 준수 (TLS 2바이트 역순 분할 & 0ms 지연)**:
+     - TLS ClientHello 분할 시 고정 2바이트(`fragSize = 2`)로 앞부분(`0x16 0x03`)과 뒷부분을 분할하고, 뒷부분 조각을 먼저 전송(Reverse Fragmentation)하여 통신사 DPI의 TLS 핸드셰이크 인식을 원천 무력화할 것.
+     - 패킷 송출 사이에 임의의 `sleep_for(1ms)`를 일절 두지 말고 즉시 연속 전송하여 레이턴시를 0ms로 유지할 것.
+
+### 🛑 DPI 패킷 엔진의 '자체 반쪽짜리 재구현' 절대 금지 및 GoodbyeDPI 원본 C 코어 네이티브 인프로세스(In-Process) 탑재 원칙
+- **실제 실수 및 안일한 태도**:
+  - 공식 소스코드가 완벽하게 검증되어 있는 GoodbyeDPI의 핵심 엔진을 프로젝트에 네이티브로 직접 이식하지 않고, 복잡한 커널 패킷 조작 로직(WinDivert 필터 분리, `WINDIVERT_FLAG_DROP` 전용 핸들 분리, Inbound SYN+ACK TTL 추적 및 삭제 타이밍, `max-payload` 파싱 필터 등)을 자체 C++ 루프로 어설프게 흉내 내어 구현함.
+  - 그 결과 최초 접속만 성공하고 후속 연결에서는 커널 소켓 리셋(`curl: (35) Recv failure: Connection was reset`)이 반복 발생하여 사용자가 브라우저를 수차례 새로고침해야만 사이트가 열리는 치명적인 결함과 사용자 불만을 유발함.
+  - 사용자가 "goodbye dpi 코드가 있는거 아니야? 코드 똑같이 복사한거 아니야?", "실행 파일을 그대로 가져온다는 말이야? 소스를 가져오는게 아니고? 왜 자꾸 이래?"라고 엄중히 질타한 뒤에야 공식 C 소스를 이식하는 수동적인 태도를 보임.
+- **방지 원칙**:
+  1. **검증된 고도화 커널 엔진의 원본 C 소스 직접 통합(In-Process Native Integration)**:
+     - WinDivert 기반 패킷 조작, DPI 차단 우회 등 미세한 프로토콜 타이밍과 상태 관리가 생명인 영역은 어설픈 자체 재구현을 철저히 배제하고, 공식 검증된 원본 C 소스코드(`goodbyedpi_orig.c`, `ttltrack.c`, `fakepackets.c`, `dnsredir.c`, `blackwhitelist.c` 등)를 그대로 프로젝트 소스 트리에 편입하여 컴파일할 것.
+  2. **외부 보조 프로세스 스폰 배제 및 스레드 래퍼(`goodbyedpi_runner.c`) 구축**:
+     - 외부 `goodbyedpi.exe`를 보조 프로세스로 띄우는 꼼수를 쓰지 않고, 원본 C 소스를 인프로세스 워커 스레드용 래퍼 함수(`RunGoodbyeDPI(argc, argv, &m_stopFlag)`)로 변환하여 메인 바이너리(`easydownload.exe`) 내에서 네이티브로 단일 실행되도록 할 것.
+     - 종료 시에는 `StopGoodbyeDPI()`를 통해 모든 활성 WinDivert 핸들에 `WinDivertShutdown(h, WINDIVERT_SHUTDOWN_BOTH)`을 호출하여, 블로킹되어 있던 `WinDivertRecv`를 0초 만에 깨우고 스레드를 안전하게 조인(`join()`)시킬 것.
+  3. **MSVC 빌드 환경 완결성 보장**:
+     - MSVC에서는 `<winsock2.h>`를 `<windows.h>`보다 무조건 먼저 인클루드하여 Windows SDK 충돌을 방어할 것.
+     - POSIX 종속적인 `<unistd.h>`, `<getopt.h>`는 프로젝트 내 경량 `getopt_long` 구현(`utils/getopt.c`)으로 대체하고, `/sdl` 검사를 통과하도록 로컬 포인터(`host_addr = NULL` 등)를 철저히 초기화할 것.
+     - `_strdup` 사용 및 `blackwhitelist.c` 내 `_CRT_SECURE_NO_WARNINGS` 선언으로 MSVC C4996 경고를 원천 차단하여 **경고 0개, 오류 0개**의 무결점 네이티브 바이너리를 완성할 것.
 
 
 

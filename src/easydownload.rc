@@ -156,7 +156,7 @@ BEGIN
     CONTROL         "DPI 차단 우회 자동 실행 (기본 권장)", IDC_CHK_DPI_AUTO_START, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 22, 44, 150, 10
     LTEXT           "우회 모드:", IDC_LBL_TAB3_MODE, 174, 44, 38, 10, SS_LEFTNOWORDWRAP
     COMBOBOX        IDC_CMB_DPI_MODE, 214, 42, 104, 70, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "* 국내 통신사 SNI 차단 및 검열을 커널 패킷 역순 분할 기법으로 완전 우회합니다.", IDC_LBL_TAB3_DESC1, 22, 62, 296, 20
+    LTEXT           "* 국내 통신사 SNI 차단 및 UDP 53 DNS 변조를 커널 패킷 역순 분할 및 비표준 안전 DNS로 완전 우회합니다.", IDC_LBL_TAB3_DESC1, 22, 62, 296, 20
 
     GROUPBOX        "Chrome 보안 DNS (DNS-over-HTTPS / Cloudflare 1.1.1.1)", IDC_GRP_TAB3_2, 14, 96, 312, 90
     LTEXT           "상태: 확인 중...", IDC_LBL_CHROME_DOH_STATUS, 22, 112, 190, 10, SS_LEFTNOWORDWRAP
@@ -242,8 +242,8 @@ END
 
 // Version Information
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,4,0,0
-PRODUCTVERSION  1,4,0,0
+FILEVERSION     1,4,2,0
+PRODUCTVERSION  1,4,2,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -256,12 +256,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "EasyDownload Project"
             VALUE "FileDescription", "EasyDownload"
-            VALUE "FileVersion", "1.4.0.0"
+            VALUE "FileVersion", "1.4.2.0"
             VALUE "InternalName", "easydownload.exe"
             VALUE "LegalCopyright", "Copyright (C) 2026. All rights reserved."
             VALUE "OriginalFilename", "easydownload.exe"
             VALUE "ProductName", "EasyDownload"
-            VALUE "ProductVersion", "1.4.0.0"
+            VALUE "ProductVersion", "1.4.2.0"
         END
     END
     BLOCK "VarFileInfo"

@@ -162,9 +162,9 @@ INT_PTR CALLBACK SettingsDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM wParam,
         CheckDlgButton(hDlg, IDC_CHK_DPI_AUTO_START, s.GetDpiBypassEnabled() ? BST_CHECKED : BST_UNCHECKED);
         HWND hDpiCmb = GetDlgItem(hDlg, IDC_CMB_DPI_MODE);
         SendMessage(hDpiCmb, CB_RESETCONTENT, 0, 0);
-        SendMessageW(hDpiCmb, CB_ADDSTRING, 0, (LPARAM)L"한국 통신사 표준 (권장)");
-        SendMessageW(hDpiCmb, CB_ADDSTRING, 0, (LPARAM)L"고속 모드 (-1)");
-        SendMessageW(hDpiCmb, CB_ADDSTRING, 0, (LPARAM)L"강력 모드 (-9)");
+        SendMessageW(hDpiCmb, CB_ADDSTRING, 0, (LPARAM)L"한국 통신사 표준 (GoodbyeDPI 호환 / 권장)");
+        SendMessageW(hDpiCmb, CB_ADDSTRING, 0, (LPARAM)L"고속 모드 (SNI 분할)");
+        SendMessageW(hDpiCmb, CB_ADDSTRING, 0, (LPARAM)L"강력 모드 (SNI+HTTP+DNS+RST 방어)");
         int curMode = s.GetDpiBypassMode();
         if (curMode < 0 || curMode > 2) curMode = 0;
         SendMessage(hDpiCmb, CB_SETCURSEL, curMode, 0);
