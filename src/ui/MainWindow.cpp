@@ -791,7 +791,11 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
             // Title provided directly from UI download list (max 50 chars for base title)
             std::wstring fname = HttpEngine::SanitizeFilename(info->title, 50);
-            bool isHls = (info->videoUrl.find(L".m3u8") != std::wstring::npos);
+            bool isHls = (info->type == L"hls") ||
+                         (info->videoUrl.find(L".m3u8") != std::wstring::npos) ||
+                         (info->videoUrl.find(L"playlist.txt") != std::wstring::npos) ||
+                         (info->videoUrl.find(L"index.txt") != std::wstring::npos) ||
+                         (info->videoUrl.find(L"master.txt") != std::wstring::npos);
 
             // Only fallback if title is completely empty or default placeholder
             if (fname.empty() || fname == L"download_file" || fname == L".mp4" || HttpEngine::IsGenericFilename(fname)) {
@@ -809,9 +813,11 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 fname = L"video_stream";
             }
 
-            // Strip .m3u8 if present
+            // Strip .m3u8 or .txt if present
             if (fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
                 fname = fname.substr(0, fname.length() - 5);
+            } else if (fname.length() >= 4 && _wcsicmp(fname.c_str() + fname.length() - 4, L".txt") == 0) {
+                fname = fname.substr(0, fname.length() - 4);
             }
 
             // Ensure standard playable video extension (.mp4 preferred for all video streams)
@@ -825,7 +831,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             PathCombineW(combined, baseDir.c_str(), fname.c_str());
 
             // Automatically start video download immediately without requiring extra dialog clicks!
-            auto task = DownloadManager::Instance().AddTask(info->videoUrl, combined, info->referer, info->cookies, 8, true);
+            auto task = DownloadManager::Instance().AddTask(info->videoUrl, combined, info->referer, info->cookies, 8, true, isHls);
             RefreshTasksList();
             if (task) {
                 DownloadProgressDialog::Show(m_hWnd, task);

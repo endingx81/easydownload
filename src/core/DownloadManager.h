@@ -19,7 +19,8 @@ public:
         const std::wstring& referer = L"",
         const std::wstring& cookies = L"",
         int parts = 0,
-        bool startImmediately = true
+        bool startImmediately = true,
+        bool isHls = false
     );
 
     bool StartTask(const std::wstring& id);

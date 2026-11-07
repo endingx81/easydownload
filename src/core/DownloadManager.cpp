@@ -44,22 +44,31 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
     const std::wstring& referer,
     const std::wstring& cookies,
     int parts,
-    bool startImmediately
+    bool startImmediately,
+    bool isHls
 ) {
     if (url.empty()) return nullptr;
 
     int actualParts = parts > 0 ? parts : Settings::Instance().GetInitialParts();
     std::wstring actualPath = savePath;
-    bool isHls = (url.find(L".m3u8") != std::wstring::npos);
+    bool isHlsResolved = isHls ||
+                         (url.find(L".m3u8") != std::wstring::npos) ||
+                         (url.find(L"playlist.txt") != std::wstring::npos) ||
+                         (url.find(L"index.txt") != std::wstring::npos) ||
+                         (url.find(L"master.txt") != std::wstring::npos);
 
     if (actualPath.empty()) {
         std::wstring fname = HttpEngine::ExtractFilenameFromUrl(url);
         if (HttpEngine::IsGenericFilename(fname) && !referer.empty()) {
             std::wstring refTitle = HttpEngine::ExtractTitleFromRefererUrl(referer);
-            if (!refTitle.empty()) fname = refTitle + (isHls ? L".mp4" : L"");
+            if (!refTitle.empty()) fname = refTitle + (isHlsResolved ? L".mp4" : L"");
         }
-        if (isHls && fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
-            fname = fname.substr(0, fname.length() - 5) + L".mp4";
+        if (isHlsResolved) {
+            if (fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
+                fname = fname.substr(0, fname.length() - 5) + L".mp4";
+            } else if (fname.length() >= 4 && _wcsicmp(fname.c_str() + fname.length() - 4, L".txt") == 0) {
+                fname = fname.substr(0, fname.length() - 4) + L".mp4";
+            }
         }
         std::wstring baseDir = Settings::Instance().GetTargetFolderForFilename(fname);
         WCHAR combined[MAX_PATH] = { 0 };
@@ -69,24 +78,35 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
         std::wstring fname = HttpEngine::ExtractFilenameFromUrl(url);
         if (HttpEngine::IsGenericFilename(fname) && !referer.empty()) {
             std::wstring refTitle = HttpEngine::ExtractTitleFromRefererUrl(referer);
-            if (!refTitle.empty()) fname = refTitle + (isHls ? L".mp4" : L"");
+            if (!refTitle.empty()) fname = refTitle + (isHlsResolved ? L".mp4" : L"");
         }
-        if (isHls && fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
-            fname = fname.substr(0, fname.length() - 5) + L".mp4";
+        if (isHlsResolved) {
+            if (fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
+                fname = fname.substr(0, fname.length() - 5) + L".mp4";
+            } else if (fname.length() >= 4 && _wcsicmp(fname.c_str() + fname.length() - 4, L".txt") == 0) {
+                fname = fname.substr(0, fname.length() - 4) + L".mp4";
+            }
         }
         WCHAR combined[MAX_PATH] = { 0 };
         PathCombineW(combined, actualPath.c_str(), fname.c_str());
         actualPath = combined;
     }
 
-    if (isHls && actualPath.length() >= 5 && _wcsicmp(actualPath.c_str() + actualPath.length() - 5, L".m3u8") == 0) {
-        actualPath = actualPath.substr(0, actualPath.length() - 5) + L".mp4";
+    if (isHlsResolved) {
+        if (actualPath.length() >= 5 && _wcsicmp(actualPath.c_str() + actualPath.length() - 5, L".m3u8") == 0) {
+            actualPath = actualPath.substr(0, actualPath.length() - 5) + L".mp4";
+        } else if (actualPath.length() >= 4 && _wcsicmp(actualPath.c_str() + actualPath.length() - 4, L".txt") == 0) {
+            actualPath = actualPath.substr(0, actualPath.length() - 4) + L".mp4";
+        }
     }
 
     // Automatically ensure filename uniqueness: filename (1).ext, (2).ext, etc.
     actualPath = GenerateUniqueSavePath(actualPath);
 
     auto task = std::make_shared<DownloadTask>(url, actualPath, referer, cookies, actualParts);
+    if (isHlsResolved) {
+        task->SetIsHls(true);
+    }
     task->SetOnStatusChanged([this](DownloadTask*) {
         CheckQueue();
         if (m_onTasksUpdated) m_onTasksUpdated();

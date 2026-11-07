@@ -1,6 +1,7 @@
 #include "DownloadTask.h"
 #include "HttpEngine.h"
 #include "HlsDownloader.h"
+#include "SextbExtractor.h"
 #include "Settings.h"
 #include <shlobj.h>
 #include <shlwapi.h>
@@ -64,14 +65,21 @@ DownloadTask::DownloadTask(
         }
     }
 
-    m_isHls = (m_url.find(L".m3u8") != std::wstring::npos);
+    m_isHls = (m_url.find(L".m3u8") != std::wstring::npos) ||
+              (m_url.find(L"playlist.txt") != std::wstring::npos) ||
+              (m_url.find(L"index.txt") != std::wstring::npos) ||
+              (m_url.find(L"master.txt") != std::wstring::npos);
     if (m_isHls) {
-        // Enforce .mp4 extension for HLS downloads (never save as .m3u8 playlist file!)
+        // Enforce .mp4 extension for HLS downloads (never save as .m3u8 or .txt playlist file!)
         if (m_filename.length() >= 5 && _wcsicmp(m_filename.c_str() + m_filename.length() - 5, L".m3u8") == 0) {
             m_filename = m_filename.substr(0, m_filename.length() - 5) + L".mp4";
+        } else if (m_filename.length() >= 4 && _wcsicmp(m_filename.c_str() + m_filename.length() - 4, L".txt") == 0) {
+            m_filename = m_filename.substr(0, m_filename.length() - 4) + L".mp4";
         }
         if (m_savePath.length() >= 5 && _wcsicmp(m_savePath.c_str() + m_savePath.length() - 5, L".m3u8") == 0) {
             m_savePath = m_savePath.substr(0, m_savePath.length() - 5) + L".mp4";
+        } else if (m_savePath.length() >= 4 && _wcsicmp(m_savePath.c_str() + m_savePath.length() - 4, L".txt") == 0) {
+            m_savePath = m_savePath.substr(0, m_savePath.length() - 4) + L".mp4";
         }
 
         std::lock_guard<std::mutex> lock(m_chunkMutex);
@@ -441,7 +449,38 @@ void DownloadTask::WorkerLoop() {
         return;
     }
 
-    bool isHls = m_isHls || (m_url.find(L".m3u8") != std::wstring::npos);
+    bool isSextb = SextbExtractor::IsSupported(m_url);
+    if (isSextb) {
+        m_status = TaskStatus::Downloading;
+        if (m_onStatusChanged) m_onStatusChanged(this);
+
+        std::wstring realStreamUrl;
+        std::wstring realTitle;
+        std::wstring realReferer;
+        if (SextbExtractor::ExtractStream(m_url, realStreamUrl, realTitle, realReferer, m_abortFlag)) {
+            m_url = realStreamUrl;
+            m_referer = realReferer;
+            m_isHls = true;
+            if (!realTitle.empty()) {
+                m_filename = realTitle + L".mp4";
+                WCHAR dir[MAX_PATH] = { 0 };
+                wcscpy_s(dir, m_savePath.c_str());
+                PathRemoveFileSpecW(dir);
+                m_savePath = std::wstring(dir) + L"\\" + m_filename;
+            }
+        } else {
+            m_status = TaskStatus::Error;
+            m_errorMessage = L"sextb.net 동영상 스트림 추출 실패";
+            if (m_onStatusChanged) m_onStatusChanged(this);
+            return;
+        }
+    }
+
+    bool isHls = m_isHls ||
+        (m_url.find(L".m3u8") != std::wstring::npos) ||
+        (m_url.find(L"playlist.txt") != std::wstring::npos) ||
+        (m_url.find(L"index.txt") != std::wstring::npos) ||
+        (m_url.find(L"master.txt") != std::wstring::npos);
     if (isHls) {
         WCHAR dir[MAX_PATH] = { 0 };
         wcscpy_s(dir, m_savePath.c_str());

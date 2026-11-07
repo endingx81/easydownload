@@ -605,3 +605,23 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
 
 
 
+
+
+### 🎬 위장된 HLS 스트림(.txt 플레이리스트, .png 세그먼트) 및 동적 플레이어(XOR 암호화) 자동 추출/다운로드 원칙
+- **실제 현상 및 실수**:
+  - `sextb.net` 등 일부 스트리밍 사이트는 광고 차단 및 비디오 스니퍼를 회피하기 위해 다음과 같은 고도화된 위장 기법을 사용함:
+    1. 메인 페이지에서 iframe(`/e/<slug>`)을 로드하고, 내부에서 `/ajax/player` 호출 후 응답(`player_enc`)을 클라이언트 단에서 Base64 디코딩 및 XOR 복호화(`pk` 키)하여 3rd-party 플레이어(`f4scdn.com`, `hglink.to`, `streamtape.net` 등)를 동적 주입함.
+    2. 플레이어는 `/api/play/<id>?r=...` 엔드포인트를 호출하여 HLS 플레이리스트를 받는데, URL 확장자를 `.m3u8` 대신 `.txt`(`playlist.txt`, `index.txt`, `master.txt`)로 속이고 `Content-Type: text/plain`으로 반환함.
+    3. HLS 세그먼트 청크들 역시 확장자를 `.png`(`seg_00000.png`)로 위장함 (실제 데이터는 `0x47` 싱크 바이트로 시작하는 순수 MPEG-TS 스트림).
+    4. CDN 서버는 `Referer` 헤더(`https://f4scdn.com/` 또는 `https://sextb.net/`)가 없으면 `403 Forbidden`을 반환함.
+  - 기존 확장 프로그램과 데스크톱 앱은 오직 `.m3u8` 확장자나 `application/x-mpegurl` MIME 타입만을 HLS 스트림으로 간주하여 감지 및 다운로드가 전혀 동작하지 않음.
+- **방지 원칙**:
+  1. **확장 프로그램 스니퍼의 위장 플레이리스트 및 플레이어 API 감지 확장**:
+     - `background.js`의 `webRequest` 감시 대상에 `/api/play/`, `/player/api/` 및 `.txt` 기반 플레이리스트(`playlist.txt`, `index.txt`, `master.txt`)를 포함할 것.
+     - 본문 분석 시 `#EXTM3U` 및 `#EXT-X-STREAM-INF` 또는 `#EXTINF:`가 포함된 경우 Content-Type과 확장자에 상관없이 HLS 스트림으로 정확히 인식할 것.
+     - 캡처된 스트림 정보에 `Referer`와 `Origin`을 반드시 바인딩하여 데스크톱 앱에 전달할 것.
+  2. **데스크톱 네이티브 Extractor (`SextbExtractor`) 내장**:
+     - 사용자가 브라우저 확장 없이 데스크톱 앱의 'URL 추가' 창에 웹페이지 주소(`https://sextb.net/...`)를 직접 입력하더라도, C++ 네이티브 `SextbExtractor`가 자동으로 `/e/<slug>` 파싱 ➡️ `/ajax/player` 호출 ➡️ XOR 복호화 ➡️ 플레이어 iframe 추출 ➡️ `/api/play/` 호출 ➡️ 실제 스트림 URL 및 영상 제목을 원스톱으로 자동 추출할 것.
+  3. **HLS 다운로더의 위장 세그먼트(.png) 및 Referer 무결성 보장**:
+     - 위장 플레이리스트 URL(`playlist.txt` 등)이 주입되더라도 `m_isHls = true`로 강제 지정하고, 세그먼트 확장자가 `.png`이더라도 MPEG-TS 바이너리 그대로 병합하도록 구성할 것.
+     - WinHTTP 다운로드 요청 시 `Referer` 헤더를 반드시 동봉하여 CDN 403 차단을 원천 방어할 것.

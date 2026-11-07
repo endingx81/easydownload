@@ -7,6 +7,7 @@
 #include "core/DownloadManager.h"
 #include "core/LocalServer.h"
 #include "core/DpiBypassManager.h"
+#include "core/SextbExtractor.h"
 #include "ui/MainWindow.h"
 
 #pragma comment(lib, "comctl32.lib")

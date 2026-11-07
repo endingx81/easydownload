@@ -47,7 +47,19 @@ public:
         const std::wstring& referer,
         const std::wstring& cookies,
         std::string& outData,
-        std::atomic<bool>& abortFlag
+        std::atomic<bool>& abortFlag,
+        const std::wstring& customHeaders = L""
+    );
+
+    static bool PostBuffer(
+        const std::wstring& url,
+        const std::wstring& referer,
+        const std::wstring& cookies,
+        const std::string& postData,
+        const std::wstring& contentType,
+        std::string& outData,
+        std::atomic<bool>& abortFlag,
+        const std::wstring& customHeaders = L""
     );
 
     static std::wstring ExtractFilenameFromUrl(const std::wstring& url);

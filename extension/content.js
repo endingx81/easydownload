@@ -324,7 +324,11 @@
 
       if (src.includes("player") || src.includes("embed") || src.includes("video") ||
           src.includes("stream") || src.includes("recordplay") || src.includes("m3u8") ||
-          src.includes("tube") || id.includes("player") || cls.includes("player")) {
+          src.includes("tube") || src.includes("/e/") || src.includes("/v/") ||
+          id.includes("player") || cls.includes("player") ||
+          src.includes("f4scdn") || src.includes("f4stream") || src.includes("streamwish") ||
+          src.includes("streamtape") || src.includes("hglink") || src.includes("playmogo") ||
+          src.includes("ryderjet")) {
         return true;
       }
       // If streams are already detected and this is a primary video frame on the page
@@ -367,8 +371,8 @@
       videoUrl: stream.url,
       title: streamTitle,
       pageUrl: window.location.href,
-      referer: window.location.href,
-      type: stream.type || "video"
+      referer: stream.referer || window.location.href,
+      type: stream.type || "hls"
     }, (res) => {
       if (dlBtn) {
         if (res && res.success) {

@@ -69,9 +69,24 @@ static void UpdateSavePathFromUrl(HWND hDlg) {
         if (isYouTube) {
             fname = L"youtube_video.mp4";
         }
-        bool isHls = (url.find(L".m3u8") != std::wstring::npos);
+        bool isSextb = (url.find(L"sextb.net/") != std::wstring::npos);
+        if (isSextb) {
+            std::wstring clean = url;
+            size_t q = clean.find(L'?');
+            if (q != std::wstring::npos) clean = clean.substr(0, q);
+            while (!clean.empty() && (clean.back() == L'/' || clean.back() == L' ')) clean.pop_back();
+            size_t slash = clean.find_last_of(L'/');
+            std::wstring slug = (slash != std::wstring::npos) ? clean.substr(slash + 1) : L"sextb_video";
+            fname = slug + L".mp4";
+        }
+        bool isHls = (url.find(L".m3u8") != std::wstring::npos) ||
+                     (url.find(L"playlist.txt") != std::wstring::npos) ||
+                     (url.find(L"index.txt") != std::wstring::npos) ||
+                     (url.find(L"master.txt") != std::wstring::npos);
         if (isHls && fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
             fname = fname.substr(0, fname.length() - 5) + L".mp4";
+        } else if (isHls && fname.length() >= 4 && _wcsicmp(fname.c_str() + fname.length() - 4, L".txt") == 0) {
+            fname = fname.substr(0, fname.length() - 4) + L".mp4";
         }
         std::wstring dir = Settings::Instance().GetTargetFolderForFilename(fname);
         WCHAR combined[MAX_PATH] = { 0 };

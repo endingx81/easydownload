@@ -265,17 +265,63 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   handleDownloadIntercept(item);
 });
 
-// Parse M3U8 Master Playlist into multiple quality choices (1080p, 720p, etc.)
+// Parse M3U8 / Disguised Master Playlist into multiple quality choices (1080p, 720p, etc.)
 async function parseM3u8Variants(url, baseTitle, tabId, refererUrl) {
   try {
     const headers = {};
     if (refererUrl) {
       headers["Referer"] = refererUrl;
     }
+    if (url.includes("f4s")) {
+      headers["Origin"] = "https://f4scdn.com";
+      if (!headers["Referer"]) headers["Referer"] = "https://f4scdn.com/";
+    }
     const res = await fetch(url, { headers });
     if (!res.ok) return;
     const text = await res.text();
     if (!text.includes("#EXT-X-STREAM-INF")) {
+      // If direct single-variant media playlist with media segments (#EXTINF)
+      if (text.includes("#EXTINF:")) {
+        let cleanBase = cleanPageTitle(baseTitle, 50) || "동영상_스트림";
+        let totalDuration = 0;
+        const vLines = text.split("\n");
+        for (const vl of vLines) {
+          if (vl.startsWith("#EXTINF:")) {
+            const dur = parseFloat(vl.substring(8));
+            if (!isNaN(dur)) totalDuration += dur;
+          }
+        }
+        let estSize = "";
+        if (totalDuration > 0) {
+          estSize = "~" + formatBytes(Math.round((2500000 * totalDuration) / 8));
+        }
+        const singleVariant = {
+          url: url,
+          referer: refererUrl,
+          type: "HLS Stream",
+          title: cleanBase,
+          quality: "HLS 고화질",
+          resolution: "HD",
+          bandwidth: 2500000,
+          bitrate: "2.5 Mbps",
+          size: estSize,
+          detectedAt: new Date().toLocaleTimeString()
+        };
+        if (!tabVideos.has(tabId)) tabVideos.set(tabId, []);
+        const list = tabVideos.get(tabId);
+        if (!list.some(existing => existing.url === url)) {
+          list.push(singleVariant);
+          chrome.tabs.sendMessage(tabId, {
+            action: "streamDetected",
+            stream: singleVariant,
+            count: list.length
+          }).catch(() => {});
+          chrome.action.setBadgeText({ text: String(list.length), tabId: tabId });
+          chrome.action.setBadgeBackgroundColor({ color: "#0284C7", tabId: tabId });
+        }
+        return;
+      }
+
       // If sub-variant like index-f3-v1-a1.m3u8, probe parent master (master.m3u8 or index.m3u8)
       if (url.includes("-f") && !url.includes("master.m3u8")) {
         const baseSlash = url.lastIndexOf("/");
@@ -322,6 +368,7 @@ async function parseM3u8Variants(url, baseTitle, tabId, refererUrl) {
           let cleanBase = cleanPageTitle(baseTitle, 50) || "동영상_스트림";
           variants.push({
             url: variantUrl,
+            referer: refererUrl,
             type: `HLS ${label}`,
             title: `${cleanBase} [${compactQuality}]`,
             quality: compactQuality,
@@ -377,6 +424,7 @@ async function parseM3u8Variants(url, baseTitle, tabId, refererUrl) {
         }
       }
       chrome.action.setBadgeText({ text: String(list.length), tabId: tabId });
+      chrome.action.setBadgeBackgroundColor({ color: "#0284C7", tabId: tabId });
     }
   } catch (e) {
     console.debug("[EasyDownload] M3U8 parse failed:", e);
@@ -403,10 +451,48 @@ chrome.webRequest.onResponseStarted.addListener(
       return;
     }
 
+    // 3. Intercept player APIs that supply the real stream (e.g. f4stream / f4scdn / sextb)
+    if (url.includes("/api/play/") || url.includes("/player/api/")) {
+      (async () => {
+        try {
+          let tabReferer = "";
+          try {
+            const tab = await chrome.tabs.get(details.tabId);
+            if (tab && tab.url) tabReferer = tab.url;
+          } catch (e) {}
+
+          const headers = { "Accept": "application/json" };
+          if (tabReferer) headers["Referer"] = tabReferer;
+          if (details.url.includes("f4s")) {
+            headers["Origin"] = "https://f4scdn.com";
+            headers["Referer"] = details.url;
+          }
+
+          const resp = await fetch(details.url, { headers });
+          if (resp.ok) {
+            const data = await resp.json();
+            const streamUrl = data.src || data.url;
+            if (streamUrl && typeof streamUrl === "string") {
+              let fullStreamUrl = streamUrl.startsWith("http") ? streamUrl : new URL(streamUrl, details.url).href;
+              let title = await getBestTitleForTab(details.tabId, "", fullStreamUrl);
+              parseM3u8Variants(fullStreamUrl, title, details.tabId, details.url);
+            }
+          }
+        } catch (e) {}
+      })();
+      return;
+    }
+
     let isVideo = false;
     let type = "video";
 
-    if (url.includes(".m3u8")) {
+    const isPlaylist = url.includes(".m3u8") ||
+                       url.includes("/playlist.txt") ||
+                       url.includes("/index.txt") ||
+                       url.includes("/master.txt") ||
+                       (url.includes(".txt") && (url.includes("/hls/") || url.includes("/stream/")));
+
+    if (isPlaylist) {
       isVideo = true;
       type = "HLS Stream (M3U8)";
     } else if (url.includes(".mpd")) {
@@ -474,6 +560,7 @@ chrome.webRequest.onResponseStarted.addListener(
 
         const streamInfo = {
           url: details.url,
+          referer: tabReferer,
           type: type,
           title: title,
           quality: type.replace(" Video", "").replace(" Stream", ""),
@@ -494,8 +581,8 @@ chrome.webRequest.onResponseStarted.addListener(
           count: list.length
         }).catch(() => {});
 
-        // If M3U8 master playlist, automatically parse sub-qualities (1080p, 720p, etc.)
-        if (url.includes(".m3u8")) {
+        // If HLS playlist, automatically parse sub-qualities (1080p, 720p, etc.)
+        if (isPlaylist) {
           parseM3u8Variants(details.url, title, details.tabId, tabReferer);
         }
       }

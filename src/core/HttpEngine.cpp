@@ -630,7 +630,8 @@ bool HttpEngine::DownloadBuffer(
     const std::wstring& referer,
     const std::wstring& cookies,
     std::string& outData,
-    std::atomic<bool>& abortFlag
+    std::atomic<bool>& abortFlag,
+    const std::wstring& customHeaders
 ) {
     outData.clear();
     URL_COMPONENTS urlComp = { 0 };
@@ -671,6 +672,8 @@ bool HttpEngine::DownloadBuffer(
     if (effectiveReferer.empty()) {
         if (url.find(L"surrit.com") != std::wstring::npos) {
             effectiveReferer = L"https://missav123.com/";
+        } else if (url.find(L"f4s") != std::wstring::npos) {
+            effectiveReferer = L"https://f4scdn.com/";
         }
     }
 
@@ -713,6 +716,13 @@ bool HttpEngine::DownloadBuffer(
     if (!effectiveReferer.empty()) {
         headers += L"Referer: " + effectiveReferer + L"\r\n";
     }
+    if (effectiveReferer.find(L"f4s") != std::wstring::npos || url.find(L"f4s") != std::wstring::npos) {
+        headers += L"Origin: https://f4scdn.com\r\n";
+    }
+    if (!customHeaders.empty()) {
+        headers += customHeaders;
+        if (customHeaders.back() != L'\n') headers += L"\r\n";
+    }
 
     BOOL bSend = WinHttpSendRequest(
         hRequest,
@@ -731,7 +741,132 @@ bool HttpEngine::DownloadBuffer(
         WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
             WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &dwSize, WINHTTP_NO_HEADER_INDEX);
 
-        if (statusCode == 200) {
+        if (statusCode >= 200 && statusCode < 400) {
+            std::vector<char> buffer(16 * 1024);
+            DWORD bytesRead = 0;
+            while (!abortFlag && WinHttpReadData(hRequest, buffer.data(), (DWORD)buffer.size(), &bytesRead) && bytesRead > 0) {
+                outData.append(buffer.data(), bytesRead);
+            }
+            success = !abortFlag;
+        }
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return success;
+}
+
+bool HttpEngine::PostBuffer(
+    const std::wstring& url,
+    const std::wstring& referer,
+    const std::wstring& cookies,
+    const std::string& postData,
+    const std::wstring& contentType,
+    std::string& outData,
+    std::atomic<bool>& abortFlag,
+    const std::wstring& customHeaders
+) {
+    outData.clear();
+    URL_COMPONENTS urlComp = { 0 };
+    urlComp.dwStructSize = sizeof(urlComp);
+    urlComp.dwHostNameLength = (DWORD)-1;
+    urlComp.dwUrlPathLength = (DWORD)-1;
+    urlComp.dwExtraInfoLength = (DWORD)-1;
+
+    if (!WinHttpCrackUrl(url.c_str(), (DWORD)url.length(), 0, &urlComp)) {
+        return false;
+    }
+
+    std::wstring host(urlComp.lpszHostName, urlComp.dwHostNameLength);
+    std::wstring path = (urlComp.lpszUrlPath && urlComp.dwUrlPathLength > 0)
+        ? std::wstring(urlComp.lpszUrlPath, urlComp.dwUrlPathLength)
+        : L"/";
+    if (urlComp.lpszExtraInfo && urlComp.dwExtraInfoLength > 0) {
+        path.append(urlComp.lpszExtraInfo, urlComp.dwExtraInfoLength);
+    }
+
+    HINTERNET hSession = WinHttpOpen(
+        DEFAULT_USER_AGENT,
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS,
+        0
+    );
+    if (!hSession) return false;
+    WinHttpSetTimeouts(hSession, 5000, 10000, 10000, 15000);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), urlComp.nPort, 0);
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+
+    DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(
+        hConnect,
+        L"POST",
+        path.c_str(),
+        NULL,
+        WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES,
+        flags
+    );
+
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+
+    // Enable HTTP/2 protocol flag
+    DWORD protocols = WINHTTP_PROTOCOL_FLAG_HTTP2;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &protocols, sizeof(protocols));
+
+    if (flags & WINHTTP_FLAG_SECURE) {
+        DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+                         SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+                         SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+                         SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+        WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
+    }
+
+    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
+
+    std::wstring headers;
+    if (!contentType.empty()) {
+        headers += L"Content-Type: " + contentType + L"\r\n";
+    }
+    if (!cookies.empty()) {
+        headers += L"Cookie: " + cookies + L"\r\n";
+    }
+    if (!referer.empty()) {
+        headers += L"Referer: " + referer + L"\r\n";
+    }
+    if (!customHeaders.empty()) {
+        headers += customHeaders;
+        if (customHeaders.back() != L'\n') headers += L"\r\n";
+    }
+
+    BOOL bSend = WinHttpSendRequest(
+        hRequest,
+        headers.c_str(),
+        (DWORD)headers.length(),
+        (LPVOID)(postData.empty() ? NULL : postData.data()),
+        (DWORD)postData.size(),
+        (DWORD)postData.size(),
+        0
+    );
+
+    bool success = false;
+    if (bSend && WinHttpReceiveResponse(hRequest, NULL)) {
+        DWORD statusCode = 0;
+        DWORD dwSize = sizeof(statusCode);
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &dwSize, WINHTTP_NO_HEADER_INDEX);
+
+        if (statusCode >= 200 && statusCode < 400) {
             std::vector<char> buffer(16 * 1024);
             DWORD bytesRead = 0;
             while (!abortFlag && WinHttpReadData(hRequest, buffer.data(), (DWORD)buffer.size(), &bytesRead) && bytesRead > 0) {
