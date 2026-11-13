@@ -48,7 +48,8 @@ public:
         const std::wstring& cookies,
         std::string& outData,
         std::atomic<bool>& abortFlag,
-        const std::wstring& customHeaders = L""
+        const std::wstring& customHeaders = L"",
+        int* outStatusCode = nullptr
     );
 
     static bool PostBuffer(

@@ -62,6 +62,22 @@ inline std::wstring FormatEta(int64_t seconds) {
     return ss.str();
 }
 
+inline std::wstring FormatDuration(double seconds) {
+    if (seconds <= 0.0) return L"-";
+    int64_t totalSec = (int64_t)(seconds + 0.5);
+    int64_t h = totalSec / 3600;
+    int64_t m = (totalSec % 3600) / 60;
+    int64_t s = totalSec % 60;
+
+    std::wstringstream ss;
+    if (h > 0) {
+        ss << h << L":" << std::setfill(L'0') << std::setw(2) << m << L":" << std::setw(2) << s;
+    } else {
+        ss << std::setfill(L'0') << std::setw(2) << m << L":" << std::setw(2) << s;
+    }
+    return ss.str();
+}
+
 inline void ForceForegroundWindow(HWND hWnd) {
     if (!hWnd || !IsWindow(hWnd)) return;
 

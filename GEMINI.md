@@ -625,3 +625,98 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
   3. **HLS 다운로더의 위장 세그먼트(.png) 및 Referer 무결성 보장**:
      - 위장 플레이리스트 URL(`playlist.txt` 등)이 주입되더라도 `m_isHls = true`로 강제 지정하고, 세그먼트 확장자가 `.png`이더라도 MPEG-TS 바이너리 그대로 병합하도록 구성할 것.
      - WinHTTP 다운로드 요청 시 `Referer` 헤더를 반드시 동봉하여 CDN 403 차단을 원천 방어할 것.
+
+
+### 📺 동영상 스트림 감지 시 플레이타임(재생 시간) 및 영상 크기(해상도) 실시간 보강 및 UI 렌더링 패턴
+- **배경 및 원칙**:
+  - 웹 비디오 스니퍼(`background.js`)는 네트워크 패킷(M3U8 플레이리스트 헤더 등)만으로는 정확한 영상 길이(초)나 비디오 태그의 렌더링 해상도를 온전히 파악하기 어렵거나 지연될 수 있음.
+  - **HLS 스트림 재생 시간 산출**:
+    - `#EXTINF` 세그먼트 항목의 부동소수점 길이 값을 합산(`totalDuration`)하여 초 단위 총 재생 시간을 계산하고, `formatDuration`(시:분:초 / 분:초)으로 변환하여 메타데이터에 보존할 것.
+  - **DOM 비디오 엘리먼트 실시간 보강 (Enrichment)**:
+    - 웹페이지 내 `<video>` 태그의 `duration`, `videoWidth`, `videoHeight` 및 `loadedmetadata`, `canplay`, `playing`, `timeupdate` 미디어 이벤트를 감지하여, 감지된 스트림 URL과 실시간 매칭해 메타데이터를 즉시 보강할 것.
+    - 다운로드 팝업(`openDropdown`)을 여는 시점에도 DOM 스캔(`enrichStreamsFromDOM`)을 즉각 수행하여 사용자가 팝업을 클릭했을 때 항상 최신의 정확한 재생 시간과 해상도가 노출되도록 할 것.
+  - **UI 메타 뱃지(Pill) 정갈한 배치**:
+    - 단순 텍스트 나열 대신 화질 뱃지(`[1080p]`, `[720p]`), 해상도(`📐 1920×1080`), 재생 시간(`⏱ 12:34`), 파일 크기(`💾 250 MB`)를 세련된 뱃지 태그 형태로 배치하고, 정보가 없는 스트림은 존재하는 항목만 자연스럽게 표시되도록 예외 처리할 것.
+
+### 🎬 토큰 인증형 fMP4 HLS 스트림(av01.media 등) 다운로드 실패(403 Forbidden) 및 SPA 동적 토큰 상속 원칙
+- **실제 현상 및 원인**:
+  - `av01.media` / `av01.tv` 등 최신 SPA 스트리밍 사이트는 클라이언트 사이드에서 Geo IP 검증(`geo.js`) ➡️ CDN Access API(`cdn-access`)를 거쳐 획득한 단기 유효 JWT `access_token`을 플레이어 커스텀 로더가 동적으로 주입함.
+  - 플레이리스트 내부의 세그먼트 URL(`.m4s`) 및 초기화 세그먼트(`#EXT-X-MAP:URI="...init.mp4"`)에는 토큰 쿼리 스트링이 노출되어 있지 않아, 다운로더가 플레이리스트 원문 URL 그대로 요청할 경우 `403 Forbidden` 차단 발생.
+  - 또한 Chrome 확장에서 Master M3U8로부터 서브 플레이리스트 상대 경로(Relative URL)를 해석할 때 브라우저 `new URL()` 표준 동작상 베이스 URL의 쿼리 스트링(`?access_token=...`)이 탈락(Drop)되어 세부 화질 요청 시 403 차단이 발생하는 결함 유발.
+- **방지 원칙**:
+  1. **M3U8 파서의 쿼리 파라미터 자동 상속(Query Inheritance)**:
+     - `HlsDownloader`에서 플레이리스트 URL에 인증 토큰(`access_token`, `token`, `sig`, `auth`, `expires`)이 포함되어 있고, 파싱된 초기화 세그먼트(`#EXT-X-MAP`)나 개별 미디어 세그먼트(`.m4s`, `.ts`) URL에 토큰이 누락되어 있다면 부모 플레이리스트의 인증 쿼리 문자열을 자동으로 덧붙여(`AppendAuthQuery`) 전송할 것.
+     - fMP4 스트림은 `init_segment.mp4`를 가장 먼저 기록한 후 순차적으로 `.m4s` 조각들을 이어붙여 완벽한 `.mp4` 단일 영상으로 완성할 것.
+  2. **Chrome 확장의 상대 경로 해석 시 Auth 쿼리 보존 및 화질 프로빙**:
+     - `new URL(variantRelative, masterUrl)` 후 `masterUrl`에 쿼리가 존재할 경우 자식 URL의 searchParams로 자동 복제/전달하여 화질 프로빙 및 다운로드 요청 시 토큰 유실을 방지할 것.
+     - 서브 화질명 패턴(`-sv`, `-f`) 감지 시 상위 `master.m3u8` 프로빙으로 1080p, 720p, 360p 전 화질 목록을 수집하도록 연동할 것.
+  3. **C++ 네이티브 `Av01Extractor` 구축**:
+     - 데스크톱 앱 '새 다운로드'에 `av01.media` / `av01.tv` 주소를 직접 붙여넣었을 때도, C++ 네이티브로 비디오 ID 추출 ➡️ 메타데이터 API 조회(`title_translations.ko` 한국어 번역 제목 + `dvd_id` 품번 조합: `[품번] 제목.mp4`) ➡️ `geo.js` ➡️ `cdn-access` JWT 획득 ➡️ `master.m3u8` 최상위 화질(1080p) 자동 선택 및 스트림 생성 파이프라인을 원스톱으로 완결할 것.
+
+### 🛑 `HttpEngine::DownloadBuffer` 매개변수 순서 혼동으로 인한 기형 HTTP 헤더(`Cookie: User-Agent: ...`) 및 전송 거부 방지
+- **실제 실수**:
+  - `HttpEngine::DownloadBuffer(url, referer, cookies, outData, abortFlag, customHeaders)`의 시그니처에서 3번째 인자가 `cookies`이고 6번째 인자가 `customHeaders`임에도, 신규 `Av01Extractor.cpp` 구현 시 `customHeaders`를 3번째 인자 자리에 넘겨 호출함 (`DownloadBuffer(geoUrl, defaultReferer, customHeaders, geoJson, abortFlag)`).
+  - 이로 인해 내부적으로 `Cookie: User-Agent: Mozilla/5.0 ...\r\n\r\n`이라는 치명적인 이중 개행 기형 HTTP 헤더가 조합되었고, WinHTTP가 `ERROR_WINHTTP_INVALID_HEADER`로 전송을 거부하거나 대상 CDN 서버가 즉시 `400 Bad Request`를 반환하여 사용자가 앱에서 URL을 입력했을 때 `av01.media 동영상 스트림 추출 실패` 오류를 발생시킴.
+- **방지 원칙**:
+  1. `HttpEngine::DownloadBuffer` 호출 시 쿠키가 없는 일반 API 호출은 반드시 3번째 인자에 명시적 빈 문자열(`L""`)을 넘길 것 (`DownloadBuffer(url, referer, L"", outData, abortFlag)`).
+  2. `DEFAULT_USER_AGENT`는 이미 WinHTTP 세션 레벨에서 최신 Chrome UA로 자동 설정되므로, 불필요하게 커스텀 User-Agent 헤더를 개별 호출마다 중복으로 만들어 넘기지 말 것.
+  3. `HttpEngine::DownloadBuffer` 내부에서 `av01` / `iw01.xyz` 요청 시 CDN 검증에 필요한 `Origin: https://www.av01.media` 헤더를 기본 장착하여 인프라 레벨에서 호출 누락을 원천 방어할 것.
+  4. 웹페이지 URL 파싱 시 취약한 `std::wregex` 대신 직관적이고 결함 없는 문자열 인덱스 탐색(`/video/` 및 `/videos/`)을 사용하여 파싱 실패 예외를 사전 차단할 것.
+
+### 🛑 HLS 스트림 다운로드 도중 중단 방지: 임시 파일 삭제 금지, 세그먼트 디스크 캐시 기반 무손실 이어받기(`Resume`) 및 WinHTTP 수신 타임아웃(60s) 원칙
+- **실제 실수**:
+  - HLS 스트림 다운로드 도중 네트워크 지연이나 CDN 일시 버퍼링으로 단 1개의 세그먼트가 3회 재시도(0.4초 간격) 내에 실패하면, `HlsDownloader`가 `workerFailed = true`를 띄우고 지금까지 수신한 수백 개의 세그먼트 파일(`.tmp`)을 `DeleteFileW`로 모두 강제 삭제함.
+  - 이로 인해 사용자가 수 기가바이트의 영상을 다운로드받다가 중단되었을 때, 지금까지 받은 데이터가 전부 유실되고 'HLS 스트림 다운로드 실패' 에러와 함께 처음부터 다시 다운로드해야 하는 치명적인 낭비와 결함을 초래함.
+  - 또한 `HttpEngine::DownloadBuffer`의 수신 타임아웃이 15초(`15,000ms`)로 너무 짧아, 1080p 고화질 5MB 대용량 세그먼트 다운로드 시 8개 스레드가 회선을 공유하는 환경에서 15초를 초과하여 타임아웃으로 세그먼트가 드롭되는 현상이 발생함.
+- **방지 원칙**:
+  1. **HLS 세그먼트 캐시 디렉터리(`targetFilePath + L".hls_parts"`) 및 무손실 이어받기 보장**:
+     - 임의의 임시 폴더 대신 대상 파일명 기반 고정 캐시 디렉터리를 생성하고, 이미 디스크에 정상 수신된 세그먼트(`fileSize > 0`)는 실행 시 사전 스캔하여 즉시 완료 처리(`Skip`)할 것.
+     - 다운로드 중단이나 일시정지, 오류 발생 시 **이미 수신된 세그먼트 파일을 절대로 삭제하지 말고 보존**할 것.
+     - 사용자가 '재시작'을 누르면 즉시 이전 진행 지점부터 세그먼트를 이어서 다운로드하도록 보장할 것.
+     - 캐시 디렉터리는 오직 최종 타겟 `.mp4` 파일로 100% 무손실 병합이 완료되었을 때에만 안전하게 삭제할 것.
+  2. **WinHTTP 수신 타임아웃 상향(60초) 및 버퍼 확대(64KB)**:
+     - 대용량 세그먼트 수신 시 네트워크 변동을 견딜 수 있도록 `WinHttpSetTimeouts`의 수신 타임아웃을 최소 60초(`60,000ms`)로 상향할 것.
+     - `WinHttpReadData`의 읽기 버퍼를 64KB로 확대하고, 읽기 중 소켓 오류(`readError`)를 정확히 감지하여 재시도 루프로 넘길 것.
+  3. **충분한 재시도 횟수(6회) 및 지수 백오프**:
+     - 개별 세그먼트 수신 실패 시 최소 6회 재시도 루프와 1초, 2초, 3초, 4초... 지수 백오프 대기를 부여하여 일시적인 CDN 혼잡을 100% 자가 복구하도록 구성할 것.
+
+
+
+
+### 🛑 대용량 HLS 멀티스레드 세그먼트 다운로드 무중단 지속 및 실시간 토큰 핫 리프레시(Hot-Reload) 원칙
+- **실제 실수 및 문제**:
+  - `av01.media` / `iw01.xyz`와 같이 Cloudflare CDN 기반의 대용량 fMP4(약 3.5GB, 1065개 세그먼트)를 다운로드하는 도중, 약 695MB(19.3%, 약 210개 세그먼트) 지점에서 단 1개의 세그먼트가 Cloudflare 연결 끊김(`connection: close`)이나 네트워크 지연으로 6회 시도 실패하자마자 전역 플래그 `workerFailed = true`를 켜버림.
+  - 이로 인해 **정상적으로 50MB/s 이상으로 고속 다운로드 중이던 나머지 7개 워커까지 전부 즉시 루프를 탈출하고 다운로드가 중단**되는 치명적인 조기 전역 폭사가 발생함.
+  - 또한 다운로드 도중 단기 JWT `access_token`이 만료되거나 401/403이 발생했을 때 다운로더가 새 토큰을 갱신하지 않고 만료된 URL로만 반복 요청하다 실패함.
+  - 더욱이 첫 실행 후 `m_url`이 `customers.iw01.xyz/...`로 치환되었는데, `Av01Extractor::IsSupported`가 `iw01.xyz` 도메인을 인식하지 않아 사용자가 "다시 시도" 버튼을 눌렀을 때 새 토큰 재발급 없이 이전의 만료된 URL로 다시 시작되어 즉시 멈추는 결함을 유발함.
+  - 캐시 재개 시에도 첫 번째 워커(0번)만 진행률을 보고하여 UI 세그먼트 바의 1, 2번 블록만 파랗게 차고 3~8번 블록이 0으로 노출되는 시각적 불일치가 발생함.
+- **방지 원칙**:
+  1. **단일 세그먼트 실패 시 전역 워커 종료(`workerFailed`) 절대 금지 및 격리 재시도 큐(`retryQueue`) 운용**:
+     - 1개 세그먼트가 일시 실패하더라도 절대 전체 워커를 종료시키지 말 것.
+     - 실패한 세그먼트 인덱스를 스레드 안전한 `retryQueue`에 격리 등록하고, 해당 워커는 즉시 다음 세그먼트로 이동하여 다운로드를 계속 진행할 것.
+     - 8개 워커가 기본 할당 슬라이스를 소진한 후, `retryQueue`에 남은 조각들을 순차적으로 분담하여 최대 8회 지수 백오프(1초..8초)로 끝까지 회수하도록 보장할 것.
+  2. **실시간 토큰 핫 리프레시(TokenRefreshCallback) 연동**:
+     - `HlsDownloader`에 토큰 갱신 콜백(`tokenRefresher`)을 주입하여, 세그먼트 요청 중 HTTP 401/403 감지 또는 세그먼트 반복 실패 시 `Av01Extractor::FetchFreshAccessToken`을 호출해 즉각 새로운 JWT를 발급받을 것.
+     - 새 토큰 발급 즉시 스레드 동기화 락(`tokenMutex`)을 통해 현재 작업 중인 모든 세그먼트의 요청 URL 쿼리를 실시간 치환(`ReplaceOrAppendToken`)하여 1바이트의 끊김도 없이 무중단 연속 수신을 완결할 것.
+  3. **`iw01.xyz` 도메인 지원 및 `DownloadTask` 원본 URL(`m_originalUrl`) 영속화**:
+     - `Av01Extractor::IsSupported`에 `iw01.xyz`를 필수 포함하여 스트림 URL 상태에서도 AV01 영상임을 즉시 식별할 것.
+     - `DownloadTask`에 `m_originalUrl`을 보존하여 언제든 "다시 시도"를 누르면 신선한 스트림 URL을 재추출하여 이어받기 완결.
+  4. **M3U8 쿼리 파라미터 무조건 상속**:
+     - 특정 키워드 필터링을 제거하고 플레이리스트 URL의 모든 쿼리 파라미터(`hb=`, `access_token=`, `sign=` 등)를 하위 세그먼트로 100% 안전하게 전파할 것.
+  5. **캐시 재개 시 8개 워커 전체 세그먼트 블록 진행률 초기화 콜백 완결**:
+     - `.hls_parts` 캐시 재개 시 8개 워커 전체에 대해 `sliceCompleted[w]`를 순회 보고하여 UI 세그먼트 바에 이미 받은 진행률이 즉시 정확하게 시각화되도록 할 것.
+
+
+### 🛑 작업 영속화(tasks.dat) 파일 경로 내 공백(Whitespace) 분할 버그로 인한 재시작 시 작업 목록 증발 방지 원칙
+- **실제 실수 및 문제**:
+  - `DownloadManager::LoadTasks()`에서 `tasks.dat`로부터 다운로드 작업 정보를 복원할 때 `in >> urlStr >> pathStr >> parts >> statusInt` 스트림 추출 연산자를 사용함.
+  - C++ 스트림 추출기(`>>`)는 공백(스페이스)을 단어 구분자로 처리하므로, 사용자의 저장 폴더명이나 파일명에 띄어쓰기가 포함된 경우(`새 폴더 (2)\SNOS-050-lada 【LADA 모자이크 파괴】...`) 경로의 첫 단어(`F:\downloads\새`)까지만 읽고 중단됨.
+  - 뒤이어 오는 `in >> parts`가 숫자가 아닌 문자열(`폴더`)을 읽으려다 `std::ios::failbit` 에러를 발생시켜 파싱이 즉시 중단되었고, 그 결과 작업 목록이 메모리에 하나도 적재되지 못해 UI에서 다운로드 목록이 통째로 증발(빈 화면)함.
+  - 나아가 앱 종료 시 `Shutdown()`이 빈 메모리 목록(`0`)으로 `tasks.dat`를 덮어써 사용자의 다운로드 작업이 완전히 유실되는 치명적 사고를 초래함.
+- **방지 원칙**:
+  1. **한 줄 전체 읽기(`std::getline`) 강제**:
+     - 파일 경로, URL, 옵션 등 텍스트 기반 영속화 파일 읽기에는 절대 `operator>>`를 쓰지 말고 반드시 `std::getline(in, line)`을 사용하여 개행(`\n`) 기준으로 한 줄 전체를 온전히 읽어들일 것.
+     - 읽어들인 문자열은 `\r`, trailing whitespace를 안전하게 trim한 후 변환할 것.
+  2. **재시작 복원 작업의 디스크 캐시(`.hls_parts`) 자동 연동(`SetLoadedState`)**:
+     - 재시작 후 복원된 작업에 대해 저장 경로에 `.hls_parts` 캐시 디렉터리가 존재하는지 검사하고, 이미 받아둔 세그먼트 파일들의 바이트 합계를 즉시 산출하여 `m_downloadedBytes`에 반영할 것.
+     - 상태를 `TaskStatus::Paused(중단됨)`로 설정하여 사용자가 메인 창에서 더블클릭하거나 "시작/재시작" 버튼을 누르면 즉시 이전 진행 지점부터 이어받도록 완벽히 복원할 것.

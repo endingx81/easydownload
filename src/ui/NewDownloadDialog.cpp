@@ -79,6 +79,16 @@ static void UpdateSavePathFromUrl(HWND hDlg) {
             std::wstring slug = (slash != std::wstring::npos) ? clean.substr(slash + 1) : L"sextb_video";
             fname = slug + L".mp4";
         }
+        bool isAv01 = (url.find(L"av01.media") != std::wstring::npos || url.find(L"av01.tv") != std::wstring::npos);
+        if (isAv01) {
+            std::wstring clean = url;
+            size_t q = clean.find(L'?');
+            if (q != std::wstring::npos) clean = clean.substr(0, q);
+            while (!clean.empty() && (clean.back() == L'/' || clean.back() == L' ')) clean.pop_back();
+            size_t slash = clean.find_last_of(L'/');
+            std::wstring slug = (slash != std::wstring::npos) ? clean.substr(slash + 1) : L"av01_video";
+            fname = slug + L".mp4";
+        }
         bool isHls = (url.find(L".m3u8") != std::wstring::npos) ||
                      (url.find(L"playlist.txt") != std::wstring::npos) ||
                      (url.find(L"index.txt") != std::wstring::npos) ||

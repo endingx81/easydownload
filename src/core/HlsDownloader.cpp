@@ -97,6 +97,27 @@ bool HlsDownloader::ParsePlaylist(
     outInfo.totalDuration = 0.0;
     outInfo.isMaster = false;
 
+    // Check if playlistUrl has an auth token in query string (e.g. access_token=, token=, hb=, etc.)
+    std::wstring authTokenQuery;
+    size_t qPos = playlistUrl.find(L'?');
+    if (qPos != std::wstring::npos) {
+        authTokenQuery = playlistUrl.substr(qPos + 1);
+    }
+
+    auto AppendAuthQuery = [&](const std::wstring& targetUrl) -> std::wstring {
+        if (authTokenQuery.empty() || targetUrl.empty()) return targetUrl;
+        if (targetUrl.find(L"token=") != std::wstring::npos || targetUrl.find(L"access_token=") != std::wstring::npos) {
+            return targetUrl;
+        }
+        std::wstring res = targetUrl;
+        if (res.find(L'?') != std::wstring::npos) {
+            res += L"&" + authTokenQuery;
+        } else {
+            res += L"?" + authTokenQuery;
+        }
+        return res;
+    };
+
     StreamQuality currentQuality;
     bool expectingMediaPlaylist = false;
 
@@ -127,7 +148,7 @@ bool HlsDownloader::ParsePlaylist(
                 } catch (...) {}
             }
         } else if (expectingMediaPlaylist && line[0] != L'#') {
-            currentQuality.url = ResolveUrl(playlistUrl, line);
+            currentQuality.url = AppendAuthQuery(ResolveUrl(playlistUrl, line));
             if (currentQuality.resolution.empty()) {
                 currentQuality.resolution = std::to_wstring(currentQuality.bandwidth / 1000) + L" kbps";
             }
@@ -141,7 +162,7 @@ bool HlsDownloader::ParsePlaylist(
                 size_t endQuote = line.find(L'\"', uriPos);
                 if (endQuote != std::wstring::npos) {
                     std::wstring uri = line.substr(uriPos, endQuote - uriPos);
-                    outInfo.initSegmentUrl = ResolveUrl(playlistUrl, uri);
+                    outInfo.initSegmentUrl = AppendAuthQuery(ResolveUrl(playlistUrl, uri));
                 }
             } else {
                 uriPos = line.find(L"URI=");
@@ -149,7 +170,7 @@ bool HlsDownloader::ParsePlaylist(
                     uriPos += 4;
                     size_t comma = line.find(L',', uriPos);
                     std::wstring uri = line.substr(uriPos, comma != std::wstring::npos ? comma - uriPos : std::wstring::npos);
-                    outInfo.initSegmentUrl = ResolveUrl(playlistUrl, uri);
+                    outInfo.initSegmentUrl = AppendAuthQuery(ResolveUrl(playlistUrl, uri));
                 }
             }
         } else if (line.rfind(L"#EXTINF:", 0) == 0) {
@@ -160,7 +181,7 @@ bool HlsDownloader::ParsePlaylist(
             } catch (...) {}
         } else if (line[0] != L'#') {
             // Segment URL
-            outInfo.segmentUrls.push_back(ResolveUrl(playlistUrl, line));
+            outInfo.segmentUrls.push_back(AppendAuthQuery(ResolveUrl(playlistUrl, line)));
         }
     }
 
@@ -189,7 +210,8 @@ bool HlsDownloader::DownloadHlsStream(
     int maxWorkers,
     std::atomic<bool>& abortFlag,
     std::atomic<bool>& pauseFlag,
-    HlsProgressCallback progressCallback
+    HlsProgressCallback progressCallback,
+    TokenRefreshCallback tokenRefresher
 ) {
     HlsPlaylistInfo info;
     if (!ParsePlaylist(playlistUrl, referer, cookies, info, abortFlag)) {
@@ -217,45 +239,124 @@ bool HlsDownloader::DownloadHlsStream(
 
     int totalSegments = (int)info.segmentUrls.size();
 
-    // Create temp directory for segments
-    WCHAR tempPath[MAX_PATH] = { 0 };
-    GetTempPathW(MAX_PATH, tempPath);
-    std::wstring tempDir = std::wstring(tempPath) + L"EasyDownload_HLS_" + std::to_wstring(GetTickCount64());
-    SHCreateDirectoryExW(NULL, tempDir.c_str(), NULL);
+    // Dedicated task segment cache directory next to target file (enables instant, lossless resume!)
+    std::wstring cacheDir = targetFilePath + L".hls_parts";
+    SHCreateDirectoryExW(NULL, cacheDir.c_str(), NULL);
+
+    // Dynamic Token Management
+    std::mutex tokenMutex;
+    std::wstring currentToken;
+    size_t tokPos = playlistUrl.find(L"access_token=");
+    if (tokPos != std::wstring::npos) {
+        size_t endPos = playlistUrl.find(L'&', tokPos);
+        currentToken = playlistUrl.substr(tokPos + 13, (endPos != std::wstring::npos ? endPos - (tokPos + 13) : std::wstring::npos));
+    } else {
+        tokPos = playlistUrl.find(L"token=");
+        if (tokPos != std::wstring::npos) {
+            size_t endPos = playlistUrl.find(L'&', tokPos);
+            currentToken = playlistUrl.substr(tokPos + 6, (endPos != std::wstring::npos ? endPos - (tokPos + 6) : std::wstring::npos));
+        }
+    }
+
+    auto ReplaceOrAppendToken = [](const std::wstring& url, const std::wstring& token) -> std::wstring {
+        if (token.empty() || url.empty()) return url;
+        size_t tPos = url.find(L"access_token=");
+        if (tPos != std::wstring::npos) {
+            size_t endPos = url.find(L'&', tPos);
+            std::wstring newUrl = url.substr(0, tPos + 13) + token;
+            if (endPos != std::wstring::npos) newUrl += url.substr(endPos);
+            return newUrl;
+        }
+        tPos = url.find(L"token=");
+        if (tPos != std::wstring::npos) {
+            size_t endPos = url.find(L'&', tPos);
+            std::wstring newUrl = url.substr(0, tPos + 6) + token;
+            if (endPos != std::wstring::npos) newUrl += url.substr(endPos);
+            return newUrl;
+        }
+        if (url.find(L'?') != std::wstring::npos) {
+            return url + L"&access_token=" + token;
+        } else {
+            return url + L"?access_token=" + token;
+        }
+    };
 
     // Download fMP4 / CMAF initialization segment if present (#EXT-X-MAP)
     std::wstring initSegFile;
     if (!info.initSegmentUrl.empty()) {
-        initSegFile = tempDir + L"\\init_segment.mp4";
-        bool initOk = false;
-        std::string initData;
-        for (int attempt = 0; attempt < 3 && !abortFlag && !pauseFlag; ++attempt) {
-            if (HttpEngine::DownloadBuffer(info.initSegmentUrl, referer, cookies, initData, abortFlag)) {
-                initOk = true;
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(400 * (attempt + 1)));
+        initSegFile = cacheDir + L"\\init_segment.mp4";
+        bool initAlreadyDone = false;
+        HANDLE hInit = CreateFileW(initSegFile.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        if (hInit != INVALID_HANDLE_VALUE) {
+            if (GetFileSize(hInit, NULL) > 0) initAlreadyDone = true;
+            CloseHandle(hInit);
         }
 
-        if (initOk) {
-            std::ofstream out(initSegFile, std::ios::binary | std::ios::trunc);
-            if (out) {
-                out.write(initData.data(), initData.size());
-                out.close();
-            } else {
-                initOk = false;
+        if (!initAlreadyDone) {
+            bool initOk = false;
+            std::string initData;
+            std::wstring initUrl = info.initSegmentUrl;
+            {
+                std::lock_guard<std::mutex> lock(tokenMutex);
+                if (!currentToken.empty()) {
+                    initUrl = ReplaceOrAppendToken(initUrl, currentToken);
+                }
             }
-        }
 
-        if (!initOk) {
-            RemoveDirectoryW(tempDir.c_str());
-            return false;
+            for (int attempt = 0; attempt < 6 && !abortFlag && !pauseFlag; ++attempt) {
+                int sc = 0;
+                if (HttpEngine::DownloadBuffer(initUrl, referer, cookies, initData, abortFlag, L"", &sc)) {
+                    initOk = true;
+                    break;
+                }
+                if ((sc == 401 || sc == 403) && tokenRefresher) {
+                    std::lock_guard<std::mutex> lock(tokenMutex);
+                    std::wstring newToken;
+                    if (tokenRefresher(newToken) && !newToken.empty()) {
+                        currentToken = newToken;
+                        initUrl = ReplaceOrAppendToken(info.initSegmentUrl, currentToken);
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000 * (attempt + 1)));
+            }
+
+            if (initOk) {
+                std::ofstream out(initSegFile, std::ios::binary | std::ios::trunc);
+                if (out) {
+                    out.write(initData.data(), initData.size());
+                    out.close();
+                } else {
+                    initOk = false;
+                }
+            }
+
+            if (!initOk) {
+                return false;
+            }
         }
     }
 
     std::vector<std::wstring> segFiles(totalSegments);
     for (int i = 0; i < totalSegments; ++i) {
-        segFiles[i] = tempDir + L"\\seg_" + std::to_wstring(i) + L".tmp";
+        segFiles[i] = cacheDir + L"\\seg_" + std::to_wstring(i) + L".tmp";
+    }
+
+    // Pre-scan existing segments for instant, lossless resume
+    int preCompleted = 0;
+    int64_t preBytes = 0;
+    std::vector<bool> alreadyDone(totalSegments, false);
+
+    for (int i = 0; i < totalSegments; ++i) {
+        HANDLE hSeg = CreateFileW(segFiles[i].c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        if (hSeg != INVALID_HANDLE_VALUE) {
+            DWORD sz = GetFileSize(hSeg, NULL);
+            CloseHandle(hSeg);
+            if (sz > 0) {
+                alreadyDone[i] = true;
+                preCompleted++;
+                preBytes += sz;
+            }
+        }
     }
 
     int workersCount = (maxWorkers > 0 && maxWorkers <= 32) ? maxWorkers : 8;
@@ -271,18 +372,93 @@ bool HlsDownloader::DownloadHlsStream(
         sliceStart[w] = (w * totalSegments) / workersCount;
         sliceEnd[w] = ((w + 1) * totalSegments) / workersCount;
         sliceCurrent[w].store(sliceStart[w]);
-        sliceCompleted[w].store(0);
+        int sliceDone = 0;
+        for (int i = sliceStart[w]; i < sliceEnd[w]; ++i) {
+            if (alreadyDone[i]) sliceDone++;
+        }
+        sliceCompleted[w].store(sliceDone);
     }
 
-    std::atomic<int> completedCount{ 0 };
-    std::atomic<int64_t> totalBytesRead{ 0 };
-    std::atomic<bool> workerFailed{ false };
+    std::atomic<int> completedCount{ preCompleted };
+    std::atomic<int64_t> totalBytesRead{ preBytes };
+
+    // Initial progress report for ALL workers if resuming from cache
+    if (preCompleted > 0 && progressCallback) {
+        for (int w = 0; w < workersCount; ++w) {
+            int chunkTotal = sliceEnd[w] - sliceStart[w];
+            progressCallback(w, sliceCompleted[w].load(), chunkTotal, preCompleted, totalSegments, preBytes);
+        }
+    }
+
+    std::mutex retryMutex;
+    std::vector<int> retryQueue;
+    std::atomic<int> retryIndex{ 0 };
+
+    auto DownloadSegment = [&](int idx, int targetChunk) -> bool {
+        if (idx < 0 || idx >= totalSegments) return false;
+        if (alreadyDone[idx]) return true;
+
+        const std::wstring& baseSegUrl = info.segmentUrls[idx];
+        const std::wstring& segFile = segFiles[idx];
+
+        std::wstring segUrl = baseSegUrl;
+        {
+            std::lock_guard<std::mutex> lock(tokenMutex);
+            if (!currentToken.empty()) {
+                segUrl = ReplaceOrAppendToken(segUrl, currentToken);
+            }
+        }
+
+        bool segOk = false;
+        std::string segData;
+        int statusCode = 0;
+
+        for (int attempt = 0; attempt < 5 && !abortFlag && !pauseFlag; ++attempt) {
+            if (HttpEngine::DownloadBuffer(segUrl, referer, cookies, segData, abortFlag, L"", &statusCode)) {
+                segOk = true;
+                break;
+            }
+
+            // If 401 or 403 occurs and we have a token refresher, fetch a fresh token immediately
+            if ((statusCode == 401 || statusCode == 403) && tokenRefresher) {
+                std::lock_guard<std::mutex> lock(tokenMutex);
+                std::wstring newToken;
+                if (tokenRefresher(newToken) && !newToken.empty()) {
+                    currentToken = newToken;
+                    segUrl = ReplaceOrAppendToken(baseSegUrl, currentToken);
+                }
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(500 * (attempt + 1)));
+        }
+
+        if (segOk) {
+            std::ofstream out(segFile, std::ios::binary | std::ios::trunc);
+            if (out) {
+                out.write(segData.data(), segData.size());
+                out.close();
+
+                alreadyDone[idx] = true;
+                int chunkDone = ++sliceCompleted[targetChunk];
+                int gDone = ++completedCount;
+                int64_t bRead = (totalBytesRead += segData.size());
+
+                if (progressCallback) {
+                    int chunkTotal = sliceEnd[targetChunk] - sliceStart[targetChunk];
+                    progressCallback(targetChunk, chunkDone, chunkTotal, gDone, totalSegments, bRead);
+                }
+                return true;
+            }
+        }
+        return false;
+    };
 
     std::vector<std::thread> workers;
 
     for (int w = 0; w < workersCount; ++w) {
         workers.emplace_back([&, w]() {
-            while (!abortFlag && !pauseFlag && !workerFailed) {
+            // Phase 1: Download assigned slice + work-steal
+            while (!abortFlag && !pauseFlag) {
                 int targetChunk = w;
                 int idx = sliceCurrent[w].fetch_add(1);
 
@@ -313,42 +489,54 @@ bool HlsDownloader::DownloadHlsStream(
 
                 if (idx < 0 || idx >= totalSegments) break;
 
-                const std::wstring& segUrl = info.segmentUrls[idx];
-                const std::wstring& segFile = segFiles[idx];
-
-                bool segOk = false;
-                std::string segData;
-                for (int attempt = 0; attempt < 3 && !abortFlag && !pauseFlag; ++attempt) {
-                    if (HttpEngine::DownloadBuffer(segUrl, referer, cookies, segData, abortFlag)) {
-                        segOk = true;
-                        break;
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(400 * (attempt + 1)));
+                if (alreadyDone[idx]) {
+                    continue;
                 }
 
-                if (segOk) {
-                    std::ofstream out(segFile, std::ios::binary | std::ios::trunc);
-                    if (out) {
-                        out.write(segData.data(), segData.size());
-                        out.close();
-
-                        int chunkDone = ++sliceCompleted[targetChunk];
-                        int gDone = ++completedCount;
-                        int64_t bRead = (totalBytesRead += segData.size());
-
-                        if (progressCallback) {
-                            int chunkTotal = sliceEnd[targetChunk] - sliceStart[targetChunk];
-                            progressCallback(targetChunk, chunkDone, chunkTotal, gDone, totalSegments, bRead);
-                        }
-                    } else {
-                        workerFailed = true;
-                        break;
-                    }
-                } else {
+                if (!DownloadSegment(idx, targetChunk)) {
                     if (!abortFlag && !pauseFlag) {
-                        workerFailed = true;
+                        std::lock_guard<std::mutex> lock(retryMutex);
+                        retryQueue.push_back(idx);
                     }
-                    break;
+                }
+            }
+
+            // Phase 2: Process any segments that temporarily failed
+            while (!abortFlag && !pauseFlag) {
+                int rIdx = -1;
+                {
+                    std::lock_guard<std::mutex> lock(retryMutex);
+                    int cur = retryIndex.fetch_add(1);
+                    if (cur < (int)retryQueue.size()) {
+                        rIdx = retryQueue[cur];
+                    }
+                }
+                if (rIdx < 0) break;
+
+                if (!alreadyDone[rIdx]) {
+                    // Find chunk that owns this segment
+                    int ownerChunk = w;
+                    for (int c = 0; c < workersCount; ++c) {
+                        if (rIdx >= sliceStart[c] && rIdx < sliceEnd[c]) {
+                            ownerChunk = c;
+                            break;
+                        }
+                    }
+
+                    // Retry up to 8 times with backoff
+                    for (int retryAttempt = 0; retryAttempt < 8 && !abortFlag && !pauseFlag; ++retryAttempt) {
+                        if (DownloadSegment(rIdx, ownerChunk)) {
+                            break;
+                        }
+                        if (tokenRefresher) {
+                            std::lock_guard<std::mutex> lock(tokenMutex);
+                            std::wstring newToken;
+                            if (tokenRefresher(newToken) && !newToken.empty()) {
+                                currentToken = newToken;
+                            }
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1000 * (retryAttempt + 1)));
+                    }
                 }
             }
         });
@@ -358,15 +546,9 @@ bool HlsDownloader::DownloadHlsStream(
         if (t.joinable()) t.join();
     }
 
-    if (abortFlag || pauseFlag || workerFailed || completedCount.load() < totalSegments) {
-        // Cleanup partial files
-        if (!initSegFile.empty()) {
-            DeleteFileW(initSegFile.c_str());
-        }
-        for (const auto& sf : segFiles) {
-            DeleteFileW(sf.c_str());
-        }
-        RemoveDirectoryW(tempDir.c_str());
+    if (abortFlag || pauseFlag || completedCount.load() < totalSegments) {
+        // DO NOT delete already downloaded segment files!
+        // They remain safely in cacheDir for instant lossless resume!
         return false;
     }
 
@@ -388,13 +570,6 @@ bool HlsDownloader::DownloadHlsStream(
     );
 
     if (hTarget == INVALID_HANDLE_VALUE) {
-        if (!initSegFile.empty()) {
-            DeleteFileW(initSegFile.c_str());
-        }
-        for (const auto& sf : segFiles) {
-            DeleteFileW(sf.c_str());
-        }
-        RemoveDirectoryW(tempDir.c_str());
         return false;
     }
 
@@ -427,7 +602,7 @@ bool HlsDownloader::DownloadHlsStream(
     }
 
     CloseHandle(hTarget);
-    RemoveDirectoryW(tempDir.c_str());
+    RemoveDirectoryW(cacheDir.c_str());
     return true;
 }
 

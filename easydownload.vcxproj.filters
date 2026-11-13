@@ -36,6 +36,12 @@
     <ClInclude Include="src\core\HlsDownloader.h">
       <Filter>Core</Filter>
     </ClInclude>
+    <ClInclude Include="src\core\SextbExtractor.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\Av01Extractor.h">
+      <Filter>Core</Filter>
+    </ClInclude>
     <ClInclude Include="src\core\HttpEngine.h">
       <Filter>Core</Filter>
     </ClInclude>
@@ -84,6 +90,12 @@
       <Filter>Core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\HlsDownloader.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\SextbExtractor.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\Av01Extractor.cpp">
       <Filter>Core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\HttpEngine.cpp">

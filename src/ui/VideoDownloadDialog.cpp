@@ -127,20 +127,24 @@ INT_PTR CALLBACK VideoDownloadDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM wP
         col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
 
         col.pszText = (LPWSTR)L"품질 / 해상도";
-        col.cx = 110;
+        col.cx = 100;
         ListView_InsertColumn(hList, 0, &col);
 
-        col.pszText = (LPWSTR)L"예상 파일 크기";
-        col.cx = 105;
+        col.pszText = (LPWSTR)L"플레이타임";
+        col.cx = 85;
         ListView_InsertColumn(hList, 1, &col);
 
-        col.pszText = (LPWSTR)L"대역폭 (비트레이트)";
-        col.cx = 120;
+        col.pszText = (LPWSTR)L"예상 파일 크기";
+        col.cx = 95;
         ListView_InsertColumn(hList, 2, &col);
 
-        col.pszText = (LPWSTR)L"스트림 URL";
-        col.cx = 220;
+        col.pszText = (LPWSTR)L"대역폭 (비트레이트)";
+        col.cx = 115;
         ListView_InsertColumn(hList, 3, &col);
+
+        col.pszText = (LPWSTR)L"스트림 URL";
+        col.cx = 190;
+        ListView_InsertColumn(hList, 4, &col);
 
         if (!ctx->initUrl.empty()) {
             SetDlgItemTextW(hDlg, IDC_EDT_VIDEO_URL, ctx->initUrl.c_str());
@@ -171,6 +175,7 @@ INT_PTR CALLBACK VideoDownloadDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM wP
         if (ok && s_pVideoCtx) {
             SetDlgItemTextW(hDlg, IDC_LBL_VIDEO_STATUS, L"스트림 분석 완료! 원하는 화질을 선택하세요.");
 
+            std::wstring durStr = FormatDuration(s_pVideoCtx->playlistInfo.totalDuration);
             if (s_pVideoCtx->playlistInfo.isMaster && !s_pVideoCtx->playlistInfo.qualities.empty()) {
                 int row = 0;
                 for (const auto& q : s_pVideoCtx->playlistInfo.qualities) {
@@ -180,12 +185,14 @@ INT_PTR CALLBACK VideoDownloadDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM wP
                     item.pszText = (LPWSTR)q.resolution.c_str();
                     ListView_InsertItem(hList, &item);
 
+                    ListView_SetItemText(hList, row, 1, (LPWSTR)durStr.c_str());
+
                     std::wstring sizeStr = (q.estimatedBytes > 0) ? (L"~" + FormatBytes(q.estimatedBytes)) : L"스트리밍";
-                    ListView_SetItemText(hList, row, 1, (LPWSTR)sizeStr.c_str());
+                    ListView_SetItemText(hList, row, 2, (LPWSTR)sizeStr.c_str());
 
                     std::wstring bwStr = std::to_wstring(q.bandwidth / 1000) + L" kbps (" + FormatSpeed(q.bandwidth / 8) + L")";
-                    ListView_SetItemText(hList, row, 2, (LPWSTR)bwStr.c_str());
-                    ListView_SetItemText(hList, row, 3, (LPWSTR)q.url.c_str());
+                    ListView_SetItemText(hList, row, 3, (LPWSTR)bwStr.c_str());
+                    ListView_SetItemText(hList, row, 4, (LPWSTR)q.url.c_str());
                     row++;
                 }
                 // Auto select highest quality (last item or first item with highest bandwidth)
@@ -206,13 +213,15 @@ INT_PTR CALLBACK VideoDownloadDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM wP
                 item.pszText = (LPWSTR)L"기본 스트림 (단일 품질)";
                 ListView_InsertItem(hList, &item);
 
+                ListView_SetItemText(hList, 0, 1, (LPWSTR)durStr.c_str());
+
                 std::wstring segStr = std::to_wstring(s_pVideoCtx->playlistInfo.segmentUrls.size()) + L" 개 세그먼트";
-                ListView_SetItemText(hList, 0, 1, (LPWSTR)segStr.c_str());
-                ListView_SetItemText(hList, 0, 2, (LPWSTR)L"직접 스트림");
+                ListView_SetItemText(hList, 0, 2, (LPWSTR)segStr.c_str());
+                ListView_SetItemText(hList, 0, 3, (LPWSTR)L"직접 스트림");
 
                 WCHAR urlBuf[2048] = { 0 };
                 GetDlgItemTextW(hDlg, IDC_EDT_VIDEO_URL, urlBuf, 2048);
-                ListView_SetItemText(hList, 0, 3, urlBuf);
+                ListView_SetItemText(hList, 0, 4, urlBuf);
 
                 ListView_SetItemState(hList, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
             }
@@ -226,9 +235,10 @@ INT_PTR CALLBACK VideoDownloadDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM wP
 
             WCHAR urlBuf[2048] = { 0 };
             GetDlgItemTextW(hDlg, IDC_EDT_VIDEO_URL, urlBuf, 2048);
-            ListView_SetItemText(hList, 0, 1, (LPWSTR)L"직접 수신");
-            ListView_SetItemText(hList, 0, 2, (LPWSTR)L"원본");
-            ListView_SetItemText(hList, 0, 3, urlBuf);
+            ListView_SetItemText(hList, 0, 1, (LPWSTR)L"-");
+            ListView_SetItemText(hList, 0, 2, (LPWSTR)L"직접 수신");
+            ListView_SetItemText(hList, 0, 3, (LPWSTR)L"원본");
+            ListView_SetItemText(hList, 0, 4, urlBuf);
             ListView_SetItemState(hList, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
         }
         return TRUE;
@@ -289,7 +299,7 @@ INT_PTR CALLBACK VideoDownloadDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM wP
                 int sel = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
                 if (sel >= 0) {
                     WCHAR urlBuf[2048] = { 0 };
-                    ListView_GetItemText(hList, sel, 3, urlBuf, 2048);
+                    ListView_GetItemText(hList, sel, 4, urlBuf, 2048);
                     ctx->selectedUrl = urlBuf;
                 } else {
                     WCHAR urlBuf[2048] = { 0 };

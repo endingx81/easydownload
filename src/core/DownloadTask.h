@@ -52,6 +52,7 @@ public:
 
     std::wstring GetId() const { return m_id; }
     std::wstring GetUrl() const { return m_url; }
+    std::wstring GetOriginalUrl() const { return !m_originalUrl.empty() ? m_originalUrl : m_url; }
     std::wstring GetSavePath() const { return m_savePath; }
     std::wstring GetFilename() const { return m_filename; }
     int64_t GetTotalBytes() const { return m_totalBytes; }
@@ -73,6 +74,8 @@ public:
 
     std::vector<ChunkProgress> GetChunksProgress();
 
+    void SetLoadedState(TaskStatus status);
+
     void SetOnStatusChanged(std::function<void(DownloadTask*)> callback) { m_onStatusChanged = callback; }
 
 private:
@@ -84,6 +87,7 @@ private:
 
     std::wstring m_id;
     std::wstring m_url;
+    std::wstring m_originalUrl;
     std::wstring m_referer;
     std::wstring m_cookies;
     std::wstring m_savePath;

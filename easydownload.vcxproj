@@ -109,6 +109,7 @@ xcopy /Y /I /D "$(ProjectDir)tools\yt-dlp.exe" "$(OutDir)"</Command>
     <ClInclude Include="src\core\windivert.h" />
     <ClInclude Include="src\core\HlsDownloader.h" />
     <ClInclude Include="src\core\SextbExtractor.h" />
+    <ClInclude Include="src\core\Av01Extractor.h" />
     <ClInclude Include="src\core\HttpEngine.h" />
     <ClInclude Include="src\core\LocalServer.h" />
     <ClInclude Include="src\core\Settings.h" />
@@ -140,6 +141,7 @@ xcopy /Y /I /D "$(ProjectDir)tools\yt-dlp.exe" "$(OutDir)"</Command>
     <ClCompile Include="src\core\goodbyedpi\utils\getline.c" />
     <ClCompile Include="src\core\HlsDownloader.cpp" />
     <ClCompile Include="src\core\SextbExtractor.cpp" />
+    <ClCompile Include="src\core\Av01Extractor.cpp" />
     <ClCompile Include="src\core\HttpEngine.cpp" />
     <ClCompile Include="src\core\LocalServer.cpp" />
     <ClCompile Include="src\core\Settings.cpp" />

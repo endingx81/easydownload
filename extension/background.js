@@ -13,13 +13,26 @@ function formatBytes(bytes) {
   return bytes + " B";
 }
 
+function formatDuration(sec) {
+  if (!sec || isNaN(sec) || !isFinite(sec) || sec <= 0) return "";
+  sec = Math.round(sec);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 function cleanPageTitle(rawTitle, maxLen = 50) {
   if (!rawTitle || typeof rawTitle !== "string") return "";
   let title = rawTitle.trim();
   // Strip trailing extension if any (.html, .m3u8, .mp4, .ts)
   title = title.replace(/\.(html?|m3u8|mp4|ts|mkv|webm)$/i, "");
   // Strip site branding suffixes only at the end (e.g. " - SupJav", " | YouTube")
-  title = title.replace(/\s*[-|_|–—]\s*(SupJav|JavDB|MissAV|YouTube|FC2|Dailymotion|Vimeo|Twitch|Bilibili|XVIDEOS|Pornhub|SpankBang)\s*$/i, "");
+  title = title.replace(/\s*[-|_|–—|\|]\s*(SupJav|JavDB|MissAV|YouTube|FC2|Dailymotion|Vimeo|Twitch|Bilibili|XVIDEOS|Pornhub|SpankBang|AV01\.tv|AV01\.media|AV01)\s*$/i, "");
+  title = title.replace(/^(AV01\.tv|AV01\.media|AV01)\s*[-|_|–—|\|]\s*/i, "");
   // Replace illegal filename characters
   title = title.replace(/[\\/:*?"<>|]/g, "_");
   // Collapse whitespace
@@ -40,7 +53,8 @@ function isGenericStreamTitle(title) {
   const genericList = [
     "웹 비디오", "웹 동영상", "동영상 스트림", "video", "video_stream",
     "video_download", "stream", "player", "embed", "index", "master",
-    "playlist", "chunklist", "download_file", "동영상", "download"
+    "playlist", "chunklist", "download_file", "동영상", "download",
+    "高品質な無料av動画のストリーミング"
   ];
   if (genericList.includes(t)) return true;
   if (/^(index|master|playlist|chunklist|stream|seg|segment)[-_0-9a-z]*/i.test(t)) {
@@ -276,6 +290,10 @@ async function parseM3u8Variants(url, baseTitle, tabId, refererUrl) {
       headers["Origin"] = "https://f4scdn.com";
       if (!headers["Referer"]) headers["Referer"] = "https://f4scdn.com/";
     }
+    if (url.includes("iw01.xyz") || (refererUrl && refererUrl.includes("av01."))) {
+      headers["Origin"] = "https://www.av01.media";
+      if (!headers["Referer"]) headers["Referer"] = "https://www.av01.media/";
+    }
     const res = await fetch(url, { headers });
     if (!res.ok) return;
     const text = await res.text();
@@ -292,7 +310,9 @@ async function parseM3u8Variants(url, baseTitle, tabId, refererUrl) {
           }
         }
         let estSize = "";
+        let durationStr = "";
         if (totalDuration > 0) {
+          durationStr = formatDuration(totalDuration);
           estSize = "~" + formatBytes(Math.round((2500000 * totalDuration) / 8));
         }
         const singleVariant = {
@@ -302,6 +322,8 @@ async function parseM3u8Variants(url, baseTitle, tabId, refererUrl) {
           title: cleanBase,
           quality: "HLS 고화질",
           resolution: "HD",
+          duration: totalDuration,
+          durationStr: durationStr,
           bandwidth: 2500000,
           bitrate: "2.5 Mbps",
           size: estSize,
@@ -322,12 +344,14 @@ async function parseM3u8Variants(url, baseTitle, tabId, refererUrl) {
         return;
       }
 
-      // If sub-variant like index-f3-v1-a1.m3u8, probe parent master (master.m3u8 or index.m3u8)
-      if (url.includes("-f") && !url.includes("master.m3u8")) {
+      // If sub-variant like index-f3-v1-a1.m3u8 or index90-sv3-v1-a1.m3u8, probe parent master (master.m3u8 or index.m3u8)
+      if ((url.includes("-f") || url.includes("-sv")) && !url.includes("master.m3u8")) {
         const baseSlash = url.lastIndexOf("/");
         if (baseSlash !== -1) {
           const prefix = url.substring(0, baseSlash + 1);
-          return parseM3u8Variants(prefix + "master.m3u8", baseTitle, tabId, refererUrl);
+          const qIdx = url.indexOf("?");
+          const query = qIdx !== -1 ? url.substring(qIdx) : "";
+          return parseM3u8Variants(prefix + "master.m3u8" + query, baseTitle, tabId, refererUrl);
         }
       }
       return;
@@ -361,6 +385,20 @@ async function parseM3u8Variants(url, baseTitle, tabId, refererUrl) {
         }
 
         if (variantUrl) {
+          // If parent playlist had auth query params (e.g. access_token), propagate them to variantUrl
+          try {
+            const parentObj = new URL(url);
+            if (parentObj.search) {
+              const childObj = new URL(variantUrl);
+              parentObj.searchParams.forEach((val, key) => {
+                if (!childObj.searchParams.has(key)) {
+                  childObj.searchParams.set(key, val);
+                }
+              });
+              variantUrl = childObj.href;
+            }
+          } catch (e) {}
+
           if (!firstVariantUrl) firstVariantUrl = variantUrl;
           let compactQuality = height ? height : (bandwidth ? `${Math.round(bandwidth / 1000)}k` : "HLS");
           let label = height ? `${height} (${resolution})` : (bandwidth ? `${Math.round(bandwidth / 1000)} kbps` : "스트림");
@@ -400,8 +438,12 @@ async function parseM3u8Variants(url, baseTitle, tabId, refererUrl) {
       } catch (e) {}
     }
 
-    // Estimate file sizes
+    // Estimate file sizes and attach duration
     variants.forEach(v => {
+      if (totalDuration > 0) {
+        v.duration = totalDuration;
+        v.durationStr = formatDuration(totalDuration);
+      }
       if (v.bandwidth > 0 && totalDuration > 0) {
         const estBytes = Math.round((v.bandwidth * totalDuration) / 8);
         v.size = "~" + formatBytes(estBytes);
@@ -653,10 +695,39 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.stream && msg.stream.url) {
       if (!tabVideos.has(currentTabId)) tabVideos.set(currentTabId, []);
       const list = tabVideos.get(currentTabId);
+      const existing = list.find(s => s.url === msg.stream.url);
+      if (existing) {
+        let changed = false;
+        if (msg.stream.duration && !existing.duration) {
+          existing.duration = msg.stream.duration;
+          existing.durationStr = msg.stream.durationStr || formatDuration(msg.stream.duration);
+          changed = true;
+        }
+        if (msg.stream.resolution && !existing.resolution) {
+          existing.resolution = msg.stream.resolution;
+          changed = true;
+        }
+        if (msg.stream.size && !existing.size) {
+          existing.size = msg.stream.size;
+          changed = true;
+        }
+        if (changed) {
+          chrome.tabs.sendMessage(currentTabId, {
+            action: "streamDetected",
+            stream: existing,
+            count: list.length
+          }).catch(() => {});
+        }
+        sendResponse({ success: true });
+        return true;
+      }
       if (!list.some(s => s.url === msg.stream.url)) {
         (async () => {
           let bestTitle = await getBestTitleForTab(currentTabId, msg.stream.title, msg.stream.url);
           msg.stream.title = bestTitle;
+          if (msg.stream.duration && !msg.stream.durationStr) {
+            msg.stream.durationStr = formatDuration(msg.stream.duration);
+          }
 
           list.push(msg.stream);
           chrome.action.setBadgeText({ text: String(list.length), tabId: currentTabId });

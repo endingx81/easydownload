@@ -2,6 +2,7 @@
 #include "HttpEngine.h"
 #include "HlsDownloader.h"
 #include "SextbExtractor.h"
+#include "Av01Extractor.h"
 #include "Settings.h"
 #include <shlobj.h>
 #include <shlwapi.h>
@@ -38,6 +39,7 @@ DownloadTask::DownloadTask(
     const std::wstring& cookies,
     int numParts
 ) : m_url(url),
+    m_originalUrl(url),
     m_savePath(savePath),
     m_referer(referer),
     m_cookies(cookies),
@@ -220,6 +222,34 @@ bool DownloadTask::LoadResumeState() {
 void DownloadTask::CleanResumeState() {
     std::wstring partFile = m_savePath + L".egpart";
     DeleteFileW(partFile.c_str());
+}
+
+void DownloadTask::SetLoadedState(TaskStatus status) {
+    m_status = status;
+
+    // Check if this is an HLS download with existing segments in cacheDir
+    std::wstring cacheDir = m_savePath + L".hls_parts";
+    if (PathFileExistsW(cacheDir.c_str())) {
+        m_isHls = true;
+        WIN32_FIND_DATAW wfd;
+        std::wstring searchPattern = cacheDir + L"\\*.*";
+        HANDLE hFind = FindFirstFileW(searchPattern.c_str(), &wfd);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            int64_t totalBytesInCache = 0;
+            do {
+                if (!(wfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                    totalBytesInCache += ((int64_t)wfd.nFileSizeHigh << 32) | wfd.nFileSizeLow;
+                }
+            } while (FindNextFileW(hFind, &wfd));
+            FindClose(hFind);
+            if (totalBytesInCache > 0) {
+                m_downloadedBytes = totalBytesInCache;
+            }
+        }
+    } else {
+        // Check regular egpart resume state
+        LoadResumeState();
+    }
 }
 
 void DownloadTask::WorkerThreadFunc(HANDLE hTargetFile) {
@@ -467,10 +497,40 @@ void DownloadTask::WorkerLoop() {
                 wcscpy_s(dir, m_savePath.c_str());
                 PathRemoveFileSpecW(dir);
                 m_savePath = std::wstring(dir) + L"\\" + m_filename;
+                if (m_onStatusChanged) m_onStatusChanged(this);
             }
         } else {
             m_status = TaskStatus::Error;
             m_errorMessage = L"sextb.net 동영상 스트림 추출 실패";
+            if (m_onStatusChanged) m_onStatusChanged(this);
+            return;
+        }
+    }
+
+    std::wstring testUrl = !m_originalUrl.empty() ? m_originalUrl : m_url;
+    bool isAv01 = Av01Extractor::IsSupported(testUrl);
+    if (isAv01) {
+        m_status = TaskStatus::Downloading;
+        if (m_onStatusChanged) m_onStatusChanged(this);
+
+        std::wstring realStreamUrl;
+        std::wstring realTitle;
+        std::wstring realReferer;
+        if (Av01Extractor::ExtractStream(testUrl, realStreamUrl, realTitle, realReferer, m_abortFlag)) {
+            m_url = realStreamUrl;
+            m_referer = realReferer;
+            m_isHls = true;
+            if (!realTitle.empty() && m_filename.empty()) {
+                m_filename = realTitle + L".mp4";
+                WCHAR dir[MAX_PATH] = { 0 };
+                wcscpy_s(dir, m_savePath.c_str());
+                PathRemoveFileSpecW(dir);
+                m_savePath = std::wstring(dir) + L"\\" + m_filename;
+                if (m_onStatusChanged) m_onStatusChanged(this);
+            }
+        } else {
+            m_status = TaskStatus::Error;
+            m_errorMessage = L"av01.media 동영상 스트림 추출 실패";
             if (m_onStatusChanged) m_onStatusChanged(this);
             return;
         }
@@ -510,6 +570,16 @@ void DownloadTask::WorkerLoop() {
         }
 
         m_activeWorkers = 8;
+        HlsDownloader::TokenRefreshCallback tokenRefresher = nullptr;
+        if (Av01Extractor::IsSupported(testUrl)) {
+            std::wstring videoId = Av01Extractor::ExtractVideoId(testUrl);
+            if (!videoId.empty()) {
+                tokenRefresher = [this, videoId](std::wstring& outNewToken) -> bool {
+                    return Av01Extractor::FetchFreshAccessToken(videoId, outNewToken, m_abortFlag);
+                };
+            }
+        }
+
         bool ok = HlsDownloader::DownloadHlsStream(
             m_url,
             m_savePath,
@@ -555,7 +625,8 @@ void DownloadTask::WorkerLoop() {
                         }
                     }
                 }
-            }
+            },
+            tokenRefresher
         );
         m_activeWorkers = 0;
 

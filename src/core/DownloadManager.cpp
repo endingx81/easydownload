@@ -1,6 +1,8 @@
 #include "DownloadManager.h"
 #include "Settings.h"
 #include "HttpEngine.h"
+#include "SextbExtractor.h"
+#include "Av01Extractor.h"
 #include <shlobj.h>
 #include <shlwapi.h>
 #include <fstream>
@@ -52,6 +54,8 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
     int actualParts = parts > 0 ? parts : Settings::Instance().GetInitialParts();
     std::wstring actualPath = savePath;
     bool isHlsResolved = isHls ||
+                         SextbExtractor::IsSupported(url) ||
+                         Av01Extractor::IsSupported(url) ||
                          (url.find(L".m3u8") != std::wstring::npos) ||
                          (url.find(L"playlist.txt") != std::wstring::npos) ||
                          (url.find(L"index.txt") != std::wstring::npos) ||
@@ -68,6 +72,8 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
                 fname = fname.substr(0, fname.length() - 5) + L".mp4";
             } else if (fname.length() >= 4 && _wcsicmp(fname.c_str() + fname.length() - 4, L".txt") == 0) {
                 fname = fname.substr(0, fname.length() - 4) + L".mp4";
+            } else if (fname.find(L'.') == std::wstring::npos) {
+                fname += L".mp4";
             }
         }
         std::wstring baseDir = Settings::Instance().GetTargetFolderForFilename(fname);
@@ -85,6 +91,8 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
                 fname = fname.substr(0, fname.length() - 5) + L".mp4";
             } else if (fname.length() >= 4 && _wcsicmp(fname.c_str() + fname.length() - 4, L".txt") == 0) {
                 fname = fname.substr(0, fname.length() - 4) + L".mp4";
+            } else if (fname.find(L'.') == std::wstring::npos) {
+                fname += L".mp4";
             }
         }
         WCHAR combined[MAX_PATH] = { 0 };
@@ -240,7 +248,7 @@ void DownloadManager::SaveTasks() {
             return s;
         };
 
-        out << w2s(t->GetUrl()) << "\n";
+        out << w2s(t->GetOriginalUrl()) << "\n";
         out << w2s(t->GetSavePath()) << "\n";
         out << t->GetNumParts() << "\n";
         out << (int)t->GetStatus() << "\n";
@@ -252,8 +260,17 @@ void DownloadManager::LoadTasks() {
     std::ifstream in(path, std::ios::binary);
     if (!in) return;
 
+    std::string countLine;
+    if (!std::getline(in, countLine)) return;
+    while (!countLine.empty() && (countLine.back() == '\r' || countLine.back() == ' ')) countLine.pop_back();
+    if (countLine.empty()) return;
+
     size_t count = 0;
-    if (!(in >> count)) return;
+    try {
+        count = std::stoull(countLine);
+    } catch (...) {
+        return;
+    }
 
     auto s2w = [](const std::string& s) {
         if (s == "-" || s.empty()) return std::wstring(L"");
@@ -263,23 +280,45 @@ void DownloadManager::LoadTasks() {
         return w;
     };
 
+    auto trim = [](std::string& s) {
+        while (!s.empty() && (s.back() == '\r' || s.back() == ' ' || s.back() == '\t')) s.pop_back();
+    };
+
     std::lock_guard<std::mutex> lock(m_mutex);
     m_tasks.clear();
 
     for (size_t i = 0; i < count; ++i) {
-        std::string urlStr, pathStr;
-        int parts = 8, statusInt = 0;
-        if (in >> urlStr >> pathStr >> parts >> statusInt) {
-            std::wstring url = s2w(urlStr);
-            std::wstring savePath = s2w(pathStr);
-            if (!url.empty()) {
-                auto task = std::make_shared<DownloadTask>(url, savePath, L"", L"", parts);
-                task->SetOnStatusChanged([this](DownloadTask*) {
-                    CheckQueue();
-                    if (m_onTasksUpdated) m_onTasksUpdated();
-                });
-                m_tasks.push_back(task);
+        std::string urlStr, pathStr, partsStr, statusStr;
+        if (!std::getline(in, urlStr)) break;
+        if (!std::getline(in, pathStr)) break;
+        if (!std::getline(in, partsStr)) break;
+        if (!std::getline(in, statusStr)) break;
+
+        trim(urlStr);
+        trim(pathStr);
+        trim(partsStr);
+        trim(statusStr);
+
+        int parts = 8;
+        int statusInt = 2; // default Paused
+        try { parts = std::stoi(partsStr); } catch (...) {}
+        try { statusInt = std::stoi(statusStr); } catch (...) {}
+
+        std::wstring url = s2w(urlStr);
+        std::wstring savePath = s2w(pathStr);
+        if (!url.empty()) {
+            auto task = std::make_shared<DownloadTask>(url, savePath, L"", L"", parts);
+            TaskStatus st = (TaskStatus)statusInt;
+            if (st == TaskStatus::Downloading || st == TaskStatus::Connecting) {
+                st = TaskStatus::Paused;
             }
+            task->SetLoadedState(st);
+
+            task->SetOnStatusChanged([this](DownloadTask*) {
+                CheckQueue();
+                if (m_onTasksUpdated) m_onTasksUpdated();
+            });
+            m_tasks.push_back(task);
         }
     }
 }

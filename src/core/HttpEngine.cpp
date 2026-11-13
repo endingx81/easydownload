@@ -280,7 +280,7 @@ bool HttpEngine::QueryUrlInfo(
         0
     );
     if (!hSession) return false;
-    WinHttpSetTimeouts(hSession, 5000, 10000, 10000, 15000);
+    WinHttpSetTimeouts(hSession, 10000, 15000, 15000, 60000);
 
     HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), urlComp.nPort, 0);
     if (!hConnect) {
@@ -479,7 +479,7 @@ bool HttpEngine::DownloadRange(
         0
     );
     if (!hSession) return false;
-    WinHttpSetTimeouts(hSession, 5000, 10000, 10000, 15000);
+    WinHttpSetTimeouts(hSession, 10000, 15000, 15000, 60000);
 
     HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), urlComp.nPort, 0);
     if (!hConnect) {
@@ -631,8 +631,10 @@ bool HttpEngine::DownloadBuffer(
     const std::wstring& cookies,
     std::string& outData,
     std::atomic<bool>& abortFlag,
-    const std::wstring& customHeaders
+    const std::wstring& customHeaders,
+    int* outStatusCode
 ) {
+    if (outStatusCode) *outStatusCode = 0;
     outData.clear();
     URL_COMPONENTS urlComp = { 0 };
     urlComp.dwStructSize = sizeof(urlComp);
@@ -660,7 +662,7 @@ bool HttpEngine::DownloadBuffer(
         0
     );
     if (!hSession) return false;
-    WinHttpSetTimeouts(hSession, 5000, 10000, 10000, 15000);
+    WinHttpSetTimeouts(hSession, 10000, 15000, 15000, 60000);
 
     HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), urlComp.nPort, 0);
     if (!hConnect) {
@@ -719,6 +721,10 @@ bool HttpEngine::DownloadBuffer(
     if (effectiveReferer.find(L"f4s") != std::wstring::npos || url.find(L"f4s") != std::wstring::npos) {
         headers += L"Origin: https://f4scdn.com\r\n";
     }
+    if (effectiveReferer.find(L"av01") != std::wstring::npos || url.find(L"av01") != std::wstring::npos ||
+        effectiveReferer.find(L"iw01.xyz") != std::wstring::npos || url.find(L"iw01.xyz") != std::wstring::npos) {
+        headers += L"Origin: https://www.av01.media\r\n";
+    }
     if (!customHeaders.empty()) {
         headers += customHeaders;
         if (customHeaders.back() != L'\n') headers += L"\r\n";
@@ -740,14 +746,23 @@ bool HttpEngine::DownloadBuffer(
         DWORD dwSize = sizeof(statusCode);
         WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
             WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &dwSize, WINHTTP_NO_HEADER_INDEX);
+        if (outStatusCode) *outStatusCode = (int)statusCode;
 
         if (statusCode >= 200 && statusCode < 400) {
-            std::vector<char> buffer(16 * 1024);
+            std::vector<char> buffer(64 * 1024);
             DWORD bytesRead = 0;
-            while (!abortFlag && WinHttpReadData(hRequest, buffer.data(), (DWORD)buffer.size(), &bytesRead) && bytesRead > 0) {
+            bool readError = false;
+            while (!abortFlag) {
+                if (!WinHttpReadData(hRequest, buffer.data(), (DWORD)buffer.size(), &bytesRead)) {
+                    readError = true;
+                    break;
+                }
+                if (bytesRead == 0) {
+                    break; // Normal EOF
+                }
                 outData.append(buffer.data(), bytesRead);
             }
-            success = !abortFlag;
+            success = !abortFlag && !readError && !outData.empty();
         }
     }
 
@@ -794,7 +809,7 @@ bool HttpEngine::PostBuffer(
         0
     );
     if (!hSession) return false;
-    WinHttpSetTimeouts(hSession, 5000, 10000, 10000, 15000);
+    WinHttpSetTimeouts(hSession, 10000, 15000, 15000, 60000);
 
     HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), urlComp.nPort, 0);
     if (!hConnect) {
@@ -867,12 +882,20 @@ bool HttpEngine::PostBuffer(
             WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &dwSize, WINHTTP_NO_HEADER_INDEX);
 
         if (statusCode >= 200 && statusCode < 400) {
-            std::vector<char> buffer(16 * 1024);
+            std::vector<char> buffer(64 * 1024);
             DWORD bytesRead = 0;
-            while (!abortFlag && WinHttpReadData(hRequest, buffer.data(), (DWORD)buffer.size(), &bytesRead) && bytesRead > 0) {
+            bool readError = false;
+            while (!abortFlag) {
+                if (!WinHttpReadData(hRequest, buffer.data(), (DWORD)buffer.size(), &bytesRead)) {
+                    readError = true;
+                    break;
+                }
+                if (bytesRead == 0) {
+                    break; // Normal EOF
+                }
                 outData.append(buffer.data(), bytesRead);
             }
-            success = !abortFlag;
+            success = !abortFlag && !readError && !outData.empty();
         }
     }
 

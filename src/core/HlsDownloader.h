@@ -34,6 +34,7 @@ public:
     );
 
     typedef std::function<void(int workerIdx, int workerCompleted, int workerTotal, int completedSegments, int totalSegments, int64_t bytesRead)> HlsProgressCallback;
+    typedef std::function<bool(std::wstring& outNewToken)> TokenRefreshCallback;
 
     static bool DownloadHlsStream(
         const std::wstring& playlistUrl,
@@ -43,7 +44,8 @@ public:
         int maxWorkers,
         std::atomic<bool>& abortFlag,
         std::atomic<bool>& pauseFlag,
-        HlsProgressCallback progressCallback
+        HlsProgressCallback progressCallback,
+        TokenRefreshCallback tokenRefresher = nullptr
     );
 
     static bool IsYtDlpAvailable(std::wstring& outPath);

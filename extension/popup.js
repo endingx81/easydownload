@@ -1,3 +1,15 @@
+function formatDuration(sec) {
+  if (!sec || isNaN(sec) || !isFinite(sec) || sec <= 0) return "";
+  sec = Math.round(sec);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   const videoListEl = document.getElementById("videoList");
   const appStatusEl = document.getElementById("appStatus");
@@ -72,7 +84,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       // Strip site suffix, clean forbidden chars, and limit to 50 chars
-      displayTitle = displayTitle.replace(/\s*[-|_|–—]\s*(SupJav|JavDB|MissAV|YouTube|FC2|Dailymotion|Vimeo|Twitch|Bilibili|XVIDEOS|Pornhub|SpankBang)\s*$/i, "");
+      displayTitle = displayTitle.replace(/\s*[-|_|–—|\|]\s*(SupJav|JavDB|MissAV|YouTube|FC2|Dailymotion|Vimeo|Twitch|Bilibili|XVIDEOS|Pornhub|SpankBang|AV01\.tv|AV01\.media|AV01)\s*$/i, "");
+      displayTitle = displayTitle.replace(/^(AV01\.tv|AV01\.media|AV01)\s*[-|_|–—|\|]\s*/i, "");
       displayTitle = displayTitle.replace(/\.(html?|m3u8|mp4|ts|mkv|webm)$/i, "");
       displayTitle = displayTitle.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim();
       if (displayTitle.length > 50) {
@@ -91,12 +104,42 @@ document.addEventListener("DOMContentLoaded", async () => {
       const qualityBadge = document.createElement("span");
       qualityBadge.className = "badge-quality";
       qualityBadge.textContent = v.quality || (v.type && v.type.includes("M3U8") ? "HLS" : "VIDEO");
-
-      const sizeSpan = document.createElement("span");
-      sizeSpan.textContent = v.size ? v.size : (v.type || "");
-
       metaDiv.appendChild(qualityBadge);
-      if (v.size || v.type) metaDiv.appendChild(sizeSpan);
+
+      // Video Dimensions / Resolution (영상 크기)
+      let resText = v.resolution || "";
+      if (resText) {
+        resText = resText.replace("x", "×");
+        const resSpan = document.createElement("span");
+        resSpan.className = "meta-pill";
+        resSpan.textContent = `📐 ${resText}`;
+        resSpan.title = `영상 해상도: ${resText}`;
+        metaDiv.appendChild(resSpan);
+      }
+
+      // Playtime / Duration (플레이타임)
+      let durText = v.durationStr || (v.duration ? formatDuration(v.duration) : "");
+      if (durText) {
+        const durSpan = document.createElement("span");
+        durSpan.className = "meta-pill";
+        durSpan.textContent = `⏱ ${durText}`;
+        durSpan.title = `재생 시간: ${durText}`;
+        metaDiv.appendChild(durSpan);
+      }
+
+      // File Size (용량)
+      let sizeText = v.size || "";
+      if (sizeText) {
+        const sizeSpan = document.createElement("span");
+        sizeSpan.className = "meta-pill";
+        sizeSpan.textContent = `💾 ${sizeText}`;
+        sizeSpan.title = `예상 파일 크기: ${sizeText}`;
+        metaDiv.appendChild(sizeSpan);
+      } else if (!resText && !durText) {
+        const fallbackSpan = document.createElement("span");
+        fallbackSpan.textContent = v.type || "";
+        metaDiv.appendChild(fallbackSpan);
+      }
 
       infoDiv.appendChild(titleDiv);
       infoDiv.appendChild(metaDiv);
