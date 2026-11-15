@@ -42,7 +42,7 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
   - **방지 원칙 (표준 배포 패키징 파이프라인)**:
     1. **단일 설치 파일 빌더 절대 경로**:  
        `& "D:\coding\visualstudio\easyinstall\bin\Release\easyinstall.exe" -i "<입력_바이너리_또는_폴더>" -o "<출력경로>\Setup.exe" -n "<프로그램명>" -v "<버전>" -p "ai-open.kr" -m "<메인_exe명>"`  
-       *(예: `& "D:\coding\visualstudio\easyinstall\bin\Release\easyinstall.exe" -i "D:\coding\visualstudio\easydownload\bin\Release" -o "D:\coding\visualstudio\easydownload\EasyDownload_Setup.exe" -n "EasyDownload" -v "1.4.2" -p "ai-open.kr" -m "easydownload.exe"`)*
+       *(예: `& "D:\coding\visualstudio\easyinstall\bin\Release\easyinstall.exe" -i "D:\coding\visualstudio\easydownload\bin\Release" -o "D:\coding\visualstudio\easydownload\EasyDownload_Setup.exe" -n "EasyDownload" -v "1.4.7" -p "ai-open.kr" -m "easydownload.exe"`)*
        > [!CAUTION]
        > **단일 파일 vs 폴더 패키징 맹점 방지**: DLL(`WinDivert.dll`), 드라이버(`WinDivert64.sys`), 확장 프로그램 등 동적 의존 파일이 있는 프로젝트에서 `-i`에 단일 `exe` 경로만 전달하면 부속 파일들이 패키징에서 전부 누락됨. 이로 인해 설치 후 기존 구버전 DLL이 잔존하거나 DLL이 없어 `프로시저 시작 지점(WinDivertShutdown 등)을 찾을 수 없습니다` 오류가 발생함. 따라서 반드시 **바이너리 전체가 빌드된 폴더(`bin\Release`)를 `-i`로 전달**하여 모든 종속 파일이 100% 동봉되도록 할 것!
     2. **무설치 포터블 압축 아카이브 생성**:  
@@ -621,7 +621,8 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
      - 본문 분석 시 `#EXTM3U` 및 `#EXT-X-STREAM-INF` 또는 `#EXTINF:`가 포함된 경우 Content-Type과 확장자에 상관없이 HLS 스트림으로 정확히 인식할 것.
      - 캡처된 스트림 정보에 `Referer`와 `Origin`을 반드시 바인딩하여 데스크톱 앱에 전달할 것.
   2. **데스크톱 네이티브 Extractor (`SextbExtractor`) 내장**:
-     - 사용자가 브라우저 확장 없이 데스크톱 앱의 'URL 추가' 창에 웹페이지 주소(`https://sextb.net/...`)를 직접 입력하더라도, C++ 네이티브 `SextbExtractor`가 자동으로 `/e/<slug>` 파싱 ➡️ `/ajax/player` 호출 ➡️ XOR 복호화 ➡️ 플레이어 iframe 추출 ➡️ `/api/play/` 호출 ➡️ 실제 스트림 URL 및 영상 제목을 원스톱으로 자동 추출할 것.
+     - 사용자가 브라우저 확장 없이 데스크톱 앱의 'URL 추가' 창에 웹페이지 주소(`https://sextb.net/...`)를 직접 입력하더라도, C++ 네이티브 `SextbExtractor`가 자동으로 `/e/<slug>` 파싱 ➡️ `/ajax/player` 호출 ➡️ XOR 복호화 ➡️ 플레이어 iframe 추출을 원스톱으로 수행할 것.
+     - 특히 최신 `hglink.to` / `hgcloud.to` 플레이어로 전환된 경우, 목적지 플레이어인 `hanerix.com` 등으로 전환하여 Dean Edwards 압축 패킹 JS(`eval(function(p,a,c,k,e,d)...)`)를 C++ 네이티브 Base36/62 토큰 역치환 알고리즘으로 직접 언패킹한 뒤, `master.m3u8` 스트림 URL과 영상 제목을 0.3초 만에 무광고 자동 추출하도록 보장할 것.
   3. **HLS 다운로더의 위장 세그먼트(.png) 및 Referer 무결성 보장**:
      - 위장 플레이리스트 URL(`playlist.txt` 등)이 주입되더라도 `m_isHls = true`로 강제 지정하고, 세그먼트 확장자가 `.png`이더라도 MPEG-TS 바이너리 그대로 병합하도록 구성할 것.
      - WinHTTP 다운로드 요청 시 `Referer` 헤더를 반드시 동봉하여 CDN 403 차단을 원천 방어할 것.

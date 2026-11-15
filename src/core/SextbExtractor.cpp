@@ -2,6 +2,9 @@
 #include "HttpEngine.h"
 #include <vector>
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
 
 namespace EasyDownload {
 
@@ -12,6 +15,95 @@ static std::string FindAttr(const std::string& html, const std::string& prefix, 
     size_t end = html.find(suffix, p);
     if (end == std::string::npos) return "";
     return html.substr(p, end - p);
+}
+
+// Dean Edwards JavaScript Packer unpacker
+static std::string UnpackDeanEdwards(const std::string& packed) {
+    size_t fnPos = packed.find("function(p,a,c,k,e,d)");
+    if (fnPos == std::string::npos) return "";
+
+    size_t splitPos = packed.find(".split('|')", fnPos);
+    if (splitPos == std::string::npos) return "";
+
+    size_t dictEnd = packed.rfind('\'', splitPos);
+    if (dictEnd == std::string::npos) return "";
+    size_t dictStart = packed.rfind('\'', dictEnd - 1);
+    if (dictStart == std::string::npos) return "";
+
+    std::string dictStr = packed.substr(dictStart + 1, dictEnd - dictStart - 1);
+    std::vector<std::string> symTab;
+    size_t dPos = 0;
+    while (dPos < dictStr.size()) {
+        size_t pipe = dictStr.find('|', dPos);
+        if (pipe == std::string::npos) {
+            symTab.push_back(dictStr.substr(dPos));
+            break;
+        }
+        symTab.push_back(dictStr.substr(dPos, pipe - dPos));
+        dPos = pipe + 1;
+    }
+
+    size_t openParen = packed.find("}(", fnPos);
+    if (openParen == std::string::npos) return "";
+    size_t payloadStart = packed.find('\'', openParen);
+    if (payloadStart == std::string::npos) return "";
+
+    size_t payloadEnd = payloadStart + 1;
+    while (payloadEnd < dictStart) {
+        if (packed[payloadEnd] == '\'' && packed[payloadEnd - 1] != '\\') {
+            break;
+        }
+        payloadEnd++;
+    }
+    if (payloadEnd >= dictStart) return "";
+
+    std::string payload = packed.substr(payloadStart + 1, payloadEnd - payloadStart - 1);
+
+    size_t comma1 = packed.find(',', payloadEnd);
+    if (comma1 == std::string::npos || comma1 >= dictStart) return "";
+    size_t comma2 = packed.find(',', comma1 + 1);
+    if (comma2 == std::string::npos || comma2 >= dictStart) return "";
+
+    int radix = std::atoi(packed.c_str() + comma1 + 1);
+    if (radix <= 0 || radix > 62) radix = 36;
+
+    auto decodeBaseN = [radix](const std::string& token) -> int {
+        static const char* digits = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        int val = 0;
+        for (char ch : token) {
+            const char* p = strchr(digits, ch);
+            if (!p) return -1;
+            int d = static_cast<int>(p - digits);
+            if (d >= radix) return -1;
+            val = val * radix + d;
+        }
+        return val;
+    };
+
+    std::string unpacked;
+    unpacked.reserve(payload.size() * 2);
+
+    for (size_t i = 0; i < payload.size(); ) {
+        if (isalnum(static_cast<unsigned char>(payload[i]))) {
+            size_t start = i;
+            while (i < payload.size() && isalnum(static_cast<unsigned char>(payload[i]))) {
+                i++;
+            }
+            std::string token = payload.substr(start, i - start);
+            int val = decodeBaseN(token);
+            if (val >= 0 && val < static_cast<int>(symTab.size()) && !symTab[val].empty()) {
+                unpacked += symTab[val];
+            } else {
+                unpacked += token;
+            }
+        } else if (payload[i] == '\\' && i + 1 < payload.size()) {
+            unpacked += payload[i + 1];
+            i += 2;
+        } else {
+            unpacked += payload[i++];
+        }
+    }
+    return unpacked;
 }
 
 static std::string Base64Decode(const std::string& in) {
@@ -194,6 +286,61 @@ bool SextbExtractor::ExtractStream(
                 outStreamUrl = L"https:" + Utf8ToWide(botLink) + L"&stream=1";
                 outReferer = iframeSrcWide;
                 return true;
+            }
+        }
+    }
+
+    // 9. Handle HGLink / Hanerix (hglink.to, hgcloud.to, hanerix.com, audinifer.com, vibuxer.com)
+    if (iframeSrc.find("hglink") != std::string::npos || iframeSrc.find("hgcloud") != std::string::npos ||
+        iframeSrc.find("hanerix") != std::string::npos || iframeSrc.find("audinifer") != std::string::npos ||
+        iframeSrc.find("vibuxer") != std::string::npos) {
+
+        std::string vidId;
+        size_t ePos = iframeSrc.find("/e/");
+        if (ePos != std::string::npos) {
+            size_t idStart = ePos + 3;
+            size_t idEnd = iframeSrc.find_first_of("?/#& \t", idStart);
+            vidId = iframeSrc.substr(idStart, idEnd == std::string::npos ? std::string::npos : idEnd - idStart);
+        }
+
+        if (!vidId.empty()) {
+            static const char* kHosts[] = { "hanerix.com", "audinifer.com", "vibuxer.com" };
+            for (const char* host : kHosts) {
+                if (abortFlag.load()) return false;
+                std::string playerUrl = std::string("https://") + host + "/e/" + vidId;
+                std::wstring playerUrlWide = Utf8ToWide(playerUrl);
+                std::string playerHtml;
+
+                if (HttpEngine::DownloadBuffer(playerUrlWide, L"https://sextb.net/", L"", playerHtml, abortFlag)) {
+                    std::string hTitle = FindAttr(playerHtml, "<title>", "</title>");
+                    if (!hTitle.empty()) {
+                        outTitle = HttpEngine::SanitizeFilename(Utf8ToWide(hTitle), 50);
+                    }
+
+                    size_t evalPos = playerHtml.find("function(p,a,c,k,e,d)");
+                    if (evalPos != std::string::npos) {
+                        size_t scriptStart = playerHtml.rfind("<script", evalPos);
+                        size_t scriptEnd = playerHtml.find("</script>", evalPos);
+                        std::string scriptBlock = (scriptStart != std::string::npos && scriptEnd != std::string::npos)
+                            ? playerHtml.substr(scriptStart, scriptEnd - scriptStart)
+                            : playerHtml.substr(evalPos - 10, 15000);
+
+                        std::string unpacked = UnpackDeanEdwards(scriptBlock);
+                        if (!unpacked.empty()) {
+                            size_t m3u8Pos = unpacked.find("https://");
+                            while (m3u8Pos != std::string::npos) {
+                                size_t m3u8End = unpacked.find_first_of("\"' \t\r\n", m3u8Pos);
+                                std::string foundUrl = unpacked.substr(m3u8Pos, m3u8End - m3u8Pos);
+                                if (foundUrl.find(".m3u8") != std::string::npos) {
+                                    outStreamUrl = Utf8ToWide(foundUrl);
+                                    outReferer = Utf8ToWide(std::string("https://") + host + "/");
+                                    return true;
+                                }
+                                m3u8Pos = unpacked.find("https://", m3u8End);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
