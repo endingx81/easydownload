@@ -110,6 +110,8 @@ void DownloadTask::Start() {
 
     m_abortFlag = false;
     m_pauseFlag = false;
+    m_speedTracker.Reset();
+    m_currentSpeed = 0;
     m_status = TaskStatus::Connecting;
     if (m_onStatusChanged) m_onStatusChanged(this);
 
@@ -123,6 +125,7 @@ void DownloadTask::Pause() {
     if (m_status != TaskStatus::Downloading && m_status != TaskStatus::Connecting) return;
     m_pauseFlag = true;
     m_status = TaskStatus::Paused;
+    m_speedTracker.Reset();
     m_currentSpeed = 0;
     SaveResumeState();
     if (m_onStatusChanged) m_onStatusChanged(this);
@@ -138,6 +141,7 @@ void DownloadTask::Cancel() {
     m_abortFlag = true;
     m_pauseFlag = false;
     m_status = TaskStatus::Paused;
+    m_speedTracker.Reset();
     m_currentSpeed = 0;
     SaveResumeState();
     if (m_onStatusChanged) m_onStatusChanged(this);
@@ -296,7 +300,6 @@ void DownloadTask::WorkerThreadFunc(HANDLE hTargetFile) {
                 [this, taskRange, &currentOffset](int64_t bytesRead) {
                     currentOffset += bytesRead;
                     m_downloadedBytes += bytesRead;
-                    m_bytesSinceLastSpeedCalc += bytesRead;
                     if (taskRange.chunkIndex >= 0 && taskRange.chunkIndex < 32) {
                         m_chunkBytesReceivedInWindow[taskRange.chunkIndex] += bytesRead;
                     }
@@ -413,7 +416,8 @@ void DownloadTask::WorkerLoop() {
                 }
 
                 if (speedBytes > 0) {
-                    m_currentSpeed = speedBytes;
+                    m_speedTracker.SetDirectSpeed(speedBytes);
+                    m_currentSpeed = m_speedTracker.GetSpeed();
                 }
 
                 int activeBlocks = (percent * 8) / 100;
@@ -441,6 +445,7 @@ void DownloadTask::WorkerLoop() {
 
         if (ok) {
             m_status = TaskStatus::Completed;
+            m_speedTracker.Reset();
             m_currentSpeed = 0;
             auto now = std::chrono::system_clock::now();
             auto in_time_t = std::chrono::system_clock::to_time_t(now);
@@ -479,6 +484,7 @@ void DownloadTask::WorkerLoop() {
                 m_errorMessage = L"YouTube 다운로드 실패 (yt-dlp 실행 오류 또는 차단)";
             } else {
                 m_status = TaskStatus::Paused;
+                m_speedTracker.Reset();
                 m_currentSpeed = 0;
             }
         }
@@ -570,9 +576,8 @@ void DownloadTask::WorkerLoop() {
         m_status = TaskStatus::Downloading;
         if (m_onStatusChanged) m_onStatusChanged(this);
 
-        m_lastSpeedCalcTime = std::chrono::steady_clock::now();
-        m_bytesSinceLastSpeedCalc = 0;
-        int64_t lastReportedBytes = 0;
+        m_speedTracker.Reset();
+        m_speedTracker.Update(0);
 
         // Initialize visual segment chunks
         {
@@ -608,21 +613,9 @@ void DownloadTask::WorkerLoop() {
             8,
             m_abortFlag,
             m_pauseFlag,
-            [this, &lastReportedBytes](int workerIdx, int workerCompleted, int workerTotal, int completedSegs, int totalSegs, int64_t bytesRead) {
-                int64_t delta = bytesRead - lastReportedBytes;
-                lastReportedBytes = bytesRead;
-                if (delta > 0) {
-                    m_bytesSinceLastSpeedCalc += delta;
-                }
+            [this](int workerIdx, int workerCompleted, int workerTotal, int completedSegs, int totalSegs, int64_t bytesRead) {
                 m_downloadedBytes = bytesRead;
-
-                auto now = std::chrono::steady_clock::now();
-                auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastSpeedCalcTime).count();
-                if (elapsedMs >= 500) {
-                    m_currentSpeed = (m_bytesSinceLastSpeedCalc * 1000) / elapsedMs;
-                    m_bytesSinceLastSpeedCalc = 0;
-                    m_lastSpeedCalcTime = now;
-                }
+                m_currentSpeed = m_speedTracker.Update(bytesRead);
 
                 if (totalSegs > 0) {
                     int64_t avg = bytesRead / (completedSegs > 0 ? completedSegs : 1);
@@ -649,7 +642,7 @@ void DownloadTask::WorkerLoop() {
             tokenRefresher
         );
         m_activeWorkers = 0;
-
+        m_speedTracker.Reset();
         m_currentSpeed = 0;
 
         if (ok) {
@@ -843,8 +836,8 @@ void DownloadTask::WorkerLoop() {
     m_status = TaskStatus::Downloading;
     if (m_onStatusChanged) m_onStatusChanged(this);
 
-    m_lastSpeedCalcTime = std::chrono::steady_clock::now();
-    m_bytesSinceLastSpeedCalc = 0;
+    m_speedTracker.Reset();
+    m_speedTracker.Update(m_downloadedBytes.load());
 
     m_workerThreads.clear();
 
@@ -882,14 +875,7 @@ void DownloadTask::WorkerLoop() {
     while (!m_abortFlag && !m_pauseFlag) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
-        auto now = std::chrono::steady_clock::now();
-        auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastSpeedCalcTime).count();
-        if (elapsedMs >= 500) {
-            int64_t speed = (m_bytesSinceLastSpeedCalc * 1000) / elapsedMs;
-            m_currentSpeed = speed;
-            m_bytesSinceLastSpeedCalc = 0;
-            m_lastSpeedCalcTime = now;
-        }
+        m_currentSpeed = m_speedTracker.Update(m_downloadedBytes.load());
 
         // Smart Adaptive Acceleration: Ramp up connections to maximize final speed,
         // but verify that each newly added connection is actually receiving data before adding more!
@@ -1039,6 +1025,7 @@ void DownloadTask::WorkerLoop() {
     m_workerThreads.clear();
 
     CloseHandle(hTargetFile);
+    m_speedTracker.Reset();
     m_currentSpeed = 0;
 
     if (m_abortFlag || m_pauseFlag) {

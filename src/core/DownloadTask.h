@@ -34,6 +34,114 @@ struct RangeItem {
     int64_t endByte{ 0 };
 };
 
+class SpeedTracker {
+public:
+    SpeedTracker() {
+        Reset();
+    }
+
+    void Reset() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_samples.clear();
+        m_smoothedSpeed = 0.0;
+        m_lastReportedSpeed = 0;
+        m_lastTotalBytes = -1;
+        m_lastUpdateTime = std::chrono::steady_clock::time_point{};
+    }
+
+    int64_t Update(int64_t currentTotalBytes) {
+        auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        if (m_samples.empty() || m_lastTotalBytes < 0) {
+            m_samples.push_back({ now, currentTotalBytes });
+            m_lastUpdateTime = now;
+            m_lastTotalBytes = currentTotalBytes;
+            m_lastReportedSpeed = 0;
+            m_smoothedSpeed = 0.0;
+            return 0;
+        }
+
+        m_samples.push_back({ now, currentTotalBytes });
+
+        // Maintain 2.0-second sliding time window
+        auto cutoff = now - std::chrono::milliseconds(2000);
+        while (m_samples.size() > 2 && m_samples.front().time < cutoff) {
+            m_samples.pop_front();
+        }
+
+        int64_t rawSpeed = 0;
+        if (m_samples.size() >= 2) {
+            auto dtMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                m_samples.back().time - m_samples.front().time
+            ).count();
+
+            if (dtMs >= 150) {
+                int64_t deltaBytes = m_samples.back().bytes - m_samples.front().bytes;
+                if (deltaBytes < 0) deltaBytes = 0;
+                rawSpeed = (deltaBytes * 1000) / dtMs;
+            } else {
+                rawSpeed = m_lastReportedSpeed;
+            }
+        }
+
+        // Stall / pause detection
+        if (currentTotalBytes > m_lastTotalBytes) {
+            m_lastTotalBytes = currentTotalBytes;
+            m_lastUpdateTime = now;
+        } else {
+            auto stallMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastUpdateTime).count();
+            if (stallMs > 3000) {
+                rawSpeed = 0;
+                m_smoothedSpeed = 0.0;
+                m_lastReportedSpeed = 0;
+                return 0;
+            } else if (stallMs > 1200) {
+                rawSpeed = 0; // begin decaying
+            }
+        }
+
+        // Exponential Moving Average (EMA) smoothing: alpha = 0.4
+        if (m_smoothedSpeed <= 0.0) {
+            m_smoothedSpeed = (double)rawSpeed;
+        } else {
+            m_smoothedSpeed = 0.4 * (double)rawSpeed + 0.6 * m_smoothedSpeed;
+        }
+
+        m_lastReportedSpeed = (int64_t)(m_smoothedSpeed + 0.5);
+        return m_lastReportedSpeed;
+    }
+
+    int64_t GetSpeed() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_lastReportedSpeed;
+    }
+
+    void SetDirectSpeed(int64_t speedBytes) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_smoothedSpeed <= 0.0) {
+            m_smoothedSpeed = (double)speedBytes;
+        } else {
+            m_smoothedSpeed = 0.5 * (double)speedBytes + 0.5 * m_smoothedSpeed;
+        }
+        m_lastReportedSpeed = (int64_t)(m_smoothedSpeed + 0.5);
+        m_lastUpdateTime = std::chrono::steady_clock::now();
+    }
+
+private:
+    struct Sample {
+        std::chrono::steady_clock::time_point time;
+        int64_t bytes{ 0 };
+    };
+
+    mutable std::mutex m_mutex;
+    std::deque<Sample> m_samples;
+    double m_smoothedSpeed{ 0.0 };
+    int64_t m_lastReportedSpeed{ 0 };
+    int64_t m_lastTotalBytes{ -1 };
+    std::chrono::steady_clock::time_point m_lastUpdateTime;
+};
+
 class DownloadTask {
 public:
     DownloadTask(
@@ -187,8 +295,7 @@ private:
 
     std::function<void(DownloadTask*)> m_onStatusChanged;
 
-    std::chrono::steady_clock::time_point m_lastSpeedCalcTime;
-    int64_t m_bytesSinceLastSpeedCalc{ 0 };
+    SpeedTracker m_speedTracker;
 };
 
 } // namespace EasyDownload
