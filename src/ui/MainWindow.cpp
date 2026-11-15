@@ -719,6 +719,21 @@ void MainWindow::OnOpenSelectedFile() {
     }
 }
 
+void MainWindow::OnOpenSelectedBrowser() {
+    int sel = ListView_GetNextItem(m_hListView, -1, LVNI_SELECTED);
+    if (sel >= 0) {
+        auto tasks = DownloadManager::Instance().GetAllTasks();
+        if (sel < (int)tasks.size()) {
+            auto task = tasks[sel];
+            std::wstring openUrl = task->GetOriginalUrl();
+            if (openUrl.empty()) openUrl = task->GetUrl();
+            if (!openUrl.empty()) {
+                ShellExecuteW(NULL, L"open", openUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
+            }
+        }
+    }
+}
+
 void MainWindow::OnCopySelectedUrl() {
     int sel = ListView_GetNextItem(m_hListView, -1, LVNI_SELECTED);
     if (sel >= 0) {
@@ -1054,6 +1069,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         case ID_TASK_DELETE: OnDeleteSelected(); break;
         case ID_TASK_OPEN_FOLDER: OnOpenSelectedFolder(); break;
         case ID_TASK_OPEN_FILE: OnOpenSelectedFile(); break;
+        case ID_TASK_OPEN_BROWSER: OnOpenSelectedBrowser(); break;
         case ID_TASK_COPY_URL: OnCopySelectedUrl(); break;
         case ID_TASK_SHOW_INFO: OnShowSelectedInfo(); break;
         case ID_TASK_SETTINGS: OnSettings(); break;
@@ -1069,7 +1085,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             DestroyWindow(m_hWnd);
             break;
         case ID_ABOUT:
-            MessageBoxW(m_hWnd, L"EasyDownload v1.4.0\n\n초고속 멀티스레드 분할 다운로드 가속기\n크롬 확장 연동 및 비디오 스트림 다운로더\nYouTube / M3U8 고화질 자동 병합 다운로더\nChrome 보안 DNS(DoH) & DPI 차단 우회 내장",
+            MessageBoxW(m_hWnd, L"EasyDownload v1.5.4\n\n초고속 멀티스레드 분할 다운로드 가속기\n크롬 확장 연동 및 비디오 스트림 다운로더\nYouTube / M3U8 고화질 자동 병합 다운로더\nChrome 보안 DNS(DoH) & DPI 차단 우회 내장",
                 L"EasyDownload 정보", MB_OK | MB_ICONINFORMATION);
             break;
         }
@@ -1099,6 +1115,11 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                         auto task = tasks[sel];
                         if (task->GetStatus() == TaskStatus::Completed) {
                             OnOpenSelectedFile();
+                        } else if (task->GetStatus() == TaskStatus::Error &&
+                                   (task->GetErrorMessage().find(L"브라우저") != std::wstring::npos ||
+                                    task->GetErrorMessage().find(L"인간 확인") != std::wstring::npos ||
+                                    task->GetErrorMessage().find(L"Cloudflare") != std::wstring::npos)) {
+                            OnOpenSelectedBrowser();
                         } else {
                             DownloadProgressDialog::Show(m_hWnd, task);
                         }
@@ -1125,6 +1146,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                     AppendMenuW(hMenu, MF_STRING, ID_TASK_OPEN_FILE, L"열기(&O)");
                     AppendMenuW(hMenu, MF_STRING, ID_TASK_OPEN_FOLDER, L"폴더 열기(&F)");
+                    AppendMenuW(hMenu, MF_STRING, ID_TASK_OPEN_BROWSER, L"🌐 브라우저에서 열기 (인간 확인 / 웹페이지 방문)(&W)");
                     AppendMenuW(hMenu, MF_STRING, ID_TASK_COPY_URL, L"다운로드 주소 복사(&C)");
                     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                     AppendMenuW(hMenu, MF_STRING, ID_TASK_SHOW_INFO, L"다운로드 정보 / 진행 창(&I)...");
@@ -1132,6 +1154,65 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                     SetForegroundWindow(m_hWnd);
                     TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, m_hWnd, NULL);
                     DestroyMenu(hMenu);
+                }
+            }
+        } else if (nm->idFrom == IDC_LST_BATCH_RESULTS) {
+            if (nm->code == NM_DBLCLK) {
+                int sel = ListView_GetNextItem(m_hBatchListView, -1, LVNI_SELECTED);
+                if (sel >= 0 && sel < (int)m_batchLinks.size()) {
+                    const auto& link = m_batchLinks[sel];
+                    std::wstring openUrl = !link.originalUrl.empty() ? link.originalUrl : link.directUrl;
+                    if (!openUrl.empty()) {
+                        ShellExecuteW(NULL, L"open", openUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
+                        SetWindowTextW(m_hBatchStatusLbl, L"🌐 브라우저에서 링크를 열었습니다. 인간 확인 완료 시 크롬 확장이 다운로드를 자동 시작합니다.");
+                    }
+                }
+                return 0;
+            } else if (nm->code == NM_RCLICK) {
+                POINT pt;
+                GetCursorPos(&pt);
+                POINT clientPt = pt;
+                ScreenToClient(m_hBatchListView, &clientPt);
+                LVHITTESTINFO lvhti = { 0 };
+                lvhti.pt = clientPt;
+                int hit = ListView_HitTest(m_hBatchListView, &lvhti);
+                if (hit >= 0) {
+                    int state = ListView_GetItemState(m_hBatchListView, hit, LVIS_SELECTED);
+                    if (!(state & LVIS_SELECTED)) {
+                        ListView_SetItemState(m_hBatchListView, hit, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                    }
+
+                    HMENU hMenu = CreatePopupMenu();
+                    AppendMenuW(hMenu, MF_STRING, 4001, L"🌐 브라우저에서 열기 (인간 확인 / 웹페이지 방문)(&O)");
+                    AppendMenuW(hMenu, MF_STRING, 4002, L"📋 주소 복사(&C)");
+
+                    SetForegroundWindow(m_hWnd);
+                    int cmd = TrackPopupMenu(hMenu, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, 0, m_hWnd, NULL);
+                    DestroyMenu(hMenu);
+
+                    if (cmd == 4001 && hit < (int)m_batchLinks.size()) {
+                        const auto& link = m_batchLinks[hit];
+                        std::wstring openUrl = !link.originalUrl.empty() ? link.originalUrl : link.directUrl;
+                        if (!openUrl.empty()) {
+                            ShellExecuteW(NULL, L"open", openUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
+                            SetWindowTextW(m_hBatchStatusLbl, L"🌐 브라우저에서 링크를 열었습니다. 인간 확인 완료 시 크롬 확장이 다운로드를 자동 시작합니다.");
+                        }
+                    } else if (cmd == 4002 && hit < (int)m_batchLinks.size()) {
+                        const auto& link = m_batchLinks[hit];
+                        std::wstring copyUrl = !link.directUrl.empty() ? link.directUrl : link.originalUrl;
+                        if (!copyUrl.empty() && OpenClipboard(m_hWnd)) {
+                            EmptyClipboard();
+                            size_t bytes = (copyUrl.length() + 1) * sizeof(WCHAR);
+                            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+                            if (hMem) {
+                                memcpy(GlobalLock(hMem), copyUrl.c_str(), bytes);
+                                GlobalUnlock(hMem);
+                                SetClipboardData(CF_UNICODETEXT, hMem);
+                            }
+                            CloseClipboard();
+                        }
+                    }
+                    return 0;
                 }
             }
         }

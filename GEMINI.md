@@ -779,3 +779,36 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
        2. `<a href="URL">라벨</a>` 태그를 `[라벨](URL)` 마크다운 형식으로 자동 변환하고 HTML 특수문자(`&nbsp;`, `&amp;` 등)를 디코딩하여 실제 다운로드 URL을 100% 복원할 것.
        3. 에디트 컨트롤을 서브클래싱하여 `WM_PASTE`(`Ctrl+V`) 시 자동으로 HTML 마크다운 변환 텍스트가 삽입되도록 하고, 원클릭 `📋 클립보드 붙여넣기` 버튼도 함께 제공하여 사용자 편의성을 극대화할 것.
        4. `LinkExtractor::ParseRawText`에서도 HTML 태그(`textToScan.find(L"<a ") != npos`)가 유입될 경우 자동 변환 후 정규식 파싱을 거치도록 다중 방어막을 구축할 것.
+
+---
+
+### 🛡️ 가짜 HTML 웹페이지 다운로드 차단 가드 (바이너리 확장자 + `text/html` 차단 원칙)
+- **실제 실수 및 문제**:
+  - MegaUp 랜딩 URL이나 중간 웹페이지를 다운로드 작업으로 넘겼을 때, 혹은 서버가 Cloudflare 차단 등으로 750.4KB짜리 HTML 웹페이지를 `200 OK`로 반환했을 때 발생함.
+  - 프로그램이 `Content-Type: text/html`을 검사하지 않고 대상 파일명(`Fire_Emblem-...zip.002`, 원래 6 GB)에 750.4KB짜리 HTML 본문을 그대로 다운로드한 후 `TaskStatus::Completed`로 완료 처리해버림.
+  - 사용자는 6 GB 파일이 정상 다운로드된 줄 알았으나 실제로는 열리지 않는 750KB짜리 가짜 HTML 파일을 보고 극도로 분노하게 됨.
+- **방지 원칙**:
+  1. `DownloadTask::WorkerLoop()`에서 `HttpEngine::QueryUrlInfo` 응답 헤더의 `Content-Type`을 필수 검사할 것.
+  2. 만약 `Content-Type`에 `text/html`이 포함되어 있고 대상 파일 확장자가 바이너리/아카이브(`.zip`, `.rar`, `.7z`, `.001~.015`, `.nup`, `.iso`, `.exe`, `.bin`, `.mp4` 등)이거나 크기가 10MB 미만인 경우:
+     - **절대로 디스크에 HTML 파일을 쓰거나 완료 처리하지 말고 즉시 다운로드를 차단**할 것.
+     - 작업 상태를 `TaskStatus::Error`로 전환하고, 에러 메시지로 `L"웹페이지 또는 인간 확인(Cloudflare) 차단 페이지 감지 (더블클릭하여 브라우저에서 인증 필요)"`를 명확히 출력하여 사용자가 원인을 1초 만에 파악하도록 할 것.
+
+---
+
+### 🔄 동적 직링크 JIT(Just-In-Time) 갱신 및 만료(TTL) 방어 원칙
+- **실제 문제**:
+  - Send.now(datatransfer.to), 1Fichier(a-XX.1fichier.com) 등의 무료 파일 공유 사이트 직링크는 발급 후 1~4시간이 지나면 보안 토큰이 만료(TTL Expired)되어 `403 Forbidden` 또는 `404 Not Found` 에러를 반환함.
+  - 사용자가 Part 1~5(각 6 GB, 총 30 GB)를 일괄 추출할 때 미리 5개의 직링크를 모두 뽑아두면, 1~2파트를 받는 수 시간 동안 3~5파트의 직링크가 만료되어 순차 큐에서 기동되는 순간 다운로드가 깨져버림.
+- **방지 원칙**:
+  1. 다운로드 작업(`DownloadTask`)은 중간 공유 사이트의 원본 URL(`m_originalUrl`)을 영속화하여 안전하게 보존할 것.
+  2. 작업이 순차 큐에서 깨어나 실제 다운로드를 시작할 때(`WorkerLoop` 진입 시) 또는 첫 HTTP 연결에서 400+ 에러(403/404 등)가 발생하면, 캐시된 구 직링크 대신 **JIT(Just-In-Time) 방식으로 `LinkExtractor::ResolveLink()`를 동적으로 재호출하여 0초 전에 발급된 신선한 최신 직링크로 `m_url`을 교체**한 뒤 다운로드를 시작하도록 파이프라인을 구축할 것. 이를 통해 수십 기가의 대용량 파일을 몇 시간 동안 순차 다운로드하더라도 링크 만료가 원천 방어됨.
+
+---
+
+### 🤖 Cloudflare Turnstile 등 봇 인증 환경에서의 사용자 브라우저 인계(Handover) 및 크롬 확장 연동 원칙
+- **철칙**:
+  - 외부 데스크톱 앱이나 자동화 도구는 Cloudflare Turnstile, hCaptcha 등의 인간 확인 챌린지를 임의로 뚫거나 우회할 수 없으며 우회 시도를 해서도 안 됨.
+- **우아한 인계(Handover) 파이프라인**:
+  1. 링크 추출기(`LinkExtractor::ResolveMegaup`)에서 `download.megaup.net`과 같이 Turnstile 게이트가 존재하는 호스트를 감지하면 링크 상태를 `LinkStatus::NeedsHumanVerification`으로 지정하고 `⚠️ 인간 확인 필요 (더블클릭하여 브라우저 열기)`로 명확히 표시할 것.
+  2. 일괄 추출 리스트뷰 및 메인 다운로드 리스트뷰에서 해당 항목을 더블클릭(`NM_DBLCLK`)하거나 우클릭 메뉴를 선택하면, 기본 브라우저(`ShellExecuteW`)로 해당 랜딩 페이지를 즉시 열어줄 것.
+  3. 사용자가 브라우저에서 챌린지를 클릭하여 정당하게 통과하고 다운로드 버튼을 누르면, 백그라운드에 상주하는 EasyDownload 크롬 확장 프로그램이 브라우저 쿠키와 함께 해당 직링크를 자동 가로채서 EasyDownload 메인 창으로 즉시 전달(In-place Intercept)하여 6 GB 파일이 안전하게 다운로드되도록 완결할 것.

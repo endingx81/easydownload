@@ -43,6 +43,7 @@ private:
     void OnDeleteSelected();
     void OnOpenSelectedFolder();
     void OnOpenSelectedFile();
+    void OnOpenSelectedBrowser();
     void OnCopySelectedUrl();
     void OnShowSelectedInfo();
     void OnSettings();

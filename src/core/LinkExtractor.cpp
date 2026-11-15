@@ -507,6 +507,193 @@ bool LinkExtractor::ResolveSendNow(
     return false;
 }
 
+bool LinkExtractor::Resolve1Fichier(
+    const std::wstring& fUrl,
+    std::wstring& outDirectUrl,
+    std::wstring& outFilename,
+    int64_t& outFileSize,
+    std::atomic<bool>& abortFlag
+) {
+    // 1. Initial GET to retrieve page, filename, filesize, and establish session
+    std::string html;
+    if (!HttpEngine::DownloadBuffer(fUrl, L"https://nswvault.com/", L"", html, abortFlag)) {
+        return false;
+    }
+
+    // Extract filename from <span class="tier-name">([^<]+)</span>
+    std::regex nameRegex(R"(<span[^>]*class=["']tier-name["'][^>]*>([^<]+)</span>)", std::regex_constants::icase);
+    std::smatch mName;
+    if (std::regex_search(html, mName, nameRegex)) {
+        std::string rawName = mName[1].str();
+        int sz = MultiByteToWideChar(CP_UTF8, 0, rawName.data(), (int)rawName.size(), NULL, 0);
+        if (sz > 0) {
+            outFilename.assign(sz, 0);
+            MultiByteToWideChar(CP_UTF8, 0, rawName.data(), (int)rawName.size(), &outFilename[0], sz);
+            outFilename = HttpEngine::SanitizeFilename(outFilename);
+        }
+    }
+
+    // Extract size from <span class="tier-feat">([^<]+)</span>
+    std::regex sizeRegex(R"(<span[^>]*class=["']tier-feat["'][^>]*>([0-9.]+\s*[GMK]B)</span>)", std::regex_constants::icase);
+    std::smatch mSize;
+    if (std::regex_search(html, mSize, sizeRegex)) {
+        // Size string successfully detected in 1Fichier page
+    }
+
+    // 2. Send POST with submit=Free download to trigger direct link generation
+    URL_COMPONENTS urlComp = { 0 };
+    urlComp.dwStructSize = sizeof(urlComp);
+    urlComp.dwHostNameLength = (DWORD)-1;
+    urlComp.dwUrlPathLength = (DWORD)-1;
+    urlComp.dwExtraInfoLength = (DWORD)-1;
+
+    if (!WinHttpCrackUrl(fUrl.c_str(), (DWORD)fUrl.length(), 0, &urlComp)) {
+        return false;
+    }
+
+    std::wstring host(urlComp.lpszHostName, urlComp.dwHostNameLength);
+    std::wstring path = (urlComp.lpszUrlPath && urlComp.dwUrlPathLength > 0)
+        ? std::wstring(urlComp.lpszUrlPath, urlComp.dwUrlPathLength)
+        : L"/";
+    if (urlComp.lpszExtraInfo && urlComp.dwExtraInfoLength > 0) {
+        path += std::wstring(urlComp.lpszExtraInfo, urlComp.dwExtraInfoLength);
+    }
+
+    HINTERNET hSession = WinHttpOpen(
+        DEFAULT_USER_AGENT,
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS,
+        0
+    );
+    if (!hSession) return false;
+    WinHttpSetTimeouts(hSession, 8000, 10000, 10000, 20000);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), urlComp.nPort, 0);
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+
+    DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(
+        hConnect,
+        L"POST",
+        path.c_str(),
+        NULL,
+        fUrl.c_str(),
+        WINHTTP_DEFAULT_ACCEPT_TYPES,
+        flags
+    );
+
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+
+    if (flags & WINHTTP_FLAG_SECURE) {
+        DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+                         SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+                         SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+                         SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+        WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
+    }
+
+    std::wstring headers = L"Content-Type: application/x-www-form-urlencoded\r\nReferer: " + fUrl + L"\r\n";
+    std::string postData = "submit=Free+download&dl_no_ssl=on";
+
+    BOOL bSend = WinHttpSendRequest(
+        hRequest,
+        headers.c_str(),
+        (DWORD)headers.length(),
+        (LPVOID)postData.data(),
+        (DWORD)postData.size(),
+        (DWORD)postData.size(),
+        0
+    );
+
+    std::string postHtml;
+    if (bSend && WinHttpReceiveResponse(hRequest, NULL)) {
+        DWORD dwSize = 0;
+        do {
+            if (abortFlag.load()) break;
+            dwSize = 0;
+            if (!WinHttpQueryDataAvailable(hRequest, &dwSize) || dwSize == 0) break;
+            std::vector<char> buf(dwSize);
+            DWORD dwRead = 0;
+            if (WinHttpReadData(hRequest, buf.data(), dwSize, &dwRead) && dwRead > 0) {
+                postHtml.append(buf.data(), dwRead);
+            }
+        } while (dwSize > 0);
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+
+    // Search for direct download link: e.g. https://a-XX.1fichier.com/cXXXXX
+    std::regex directRegex(R"((https?://a-[0-9]+\.1fichier\.com/[a-zA-Z0-9_-]+))", std::regex_constants::icase);
+    std::smatch mDirect;
+    if (std::regex_search(postHtml, mDirect, directRegex)) {
+        std::string rawLink = mDirect[1].str();
+        int sz = MultiByteToWideChar(CP_UTF8, 0, rawLink.data(), (int)rawLink.size(), NULL, 0);
+        if (sz > 0) {
+            outDirectUrl.assign(sz, 0);
+            MultiByteToWideChar(CP_UTF8, 0, rawLink.data(), (int)rawLink.size(), &outDirectUrl[0], sz);
+
+            // Query Url Info for direct URL size & final filename
+            HttpHeadInfo headInfo;
+            if (HttpEngine::QueryUrlInfo(outDirectUrl, fUrl, L"", headInfo)) {
+                if (headInfo.contentLength > 0) outFileSize = headInfo.contentLength;
+                if (!headInfo.filename.empty() && outFilename.empty()) outFilename = headInfo.filename;
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool LinkExtractor::ResolveMegaup(
+    const std::wstring& megaUrl,
+    std::wstring& outDirectUrl,
+    std::wstring& outFilename,
+    int64_t& outFileSize,
+    bool& outNeedsHuman,
+    std::atomic<bool>& abortFlag
+) {
+    outDirectUrl = megaUrl;
+    outNeedsHuman = true;
+
+    // Extract filename from URL path if available
+    outFilename = HttpEngine::ExtractFilenameFromUrl(megaUrl);
+    if (outFilename.empty()) {
+        size_t slash = megaUrl.find_last_of(L'/');
+        if (slash != std::wstring::npos) {
+            outFilename = megaUrl.substr(slash + 1);
+        }
+    }
+
+    // Try downloading the landing page to parse friendly title/filesize
+    std::string html;
+    if (HttpEngine::DownloadBuffer(megaUrl, L"https://nswvault.com/", L"", html, abortFlag)) {
+        std::regex titleRegex(R"(<title>Download\s+(.*?)\s+-\s+MegaUp</title>)", std::regex_constants::icase);
+        std::smatch mTitle;
+        if (std::regex_search(html, mTitle, titleRegex)) {
+            std::string rawName = mTitle[1].str();
+            int sz = MultiByteToWideChar(CP_UTF8, 0, rawName.data(), (int)rawName.size(), NULL, 0);
+            if (sz > 0) {
+                std::wstring wName(sz, 0);
+                MultiByteToWideChar(CP_UTF8, 0, rawName.data(), (int)rawName.size(), &wName[0], sz);
+                outFilename = HttpEngine::SanitizeFilename(wName);
+            }
+        }
+    }
+
+    return true;
+}
+
 bool LinkExtractor::ResolveLink(ExtractedLink& link, std::atomic<bool>& abortFlag) {
     link.status = LinkStatus::Resolving;
     link.statusMessage = L"분석 중...";
@@ -538,7 +725,7 @@ bool LinkExtractor::ResolveLink(ExtractedLink& link, std::atomic<bool>& abortFla
         link.hostName = L"Megaup";
     }
 
-    // Step 2: Resolve send.now to direct high-speed CDN URL
+    // Step 2: Host-specific Resolution
     if (link.hostName == L"Send.now") {
         std::wstring directUrl;
         std::wstring filename;
@@ -546,20 +733,55 @@ bool LinkExtractor::ResolveLink(ExtractedLink& link, std::atomic<bool>& abortFla
         if (ResolveSendNow(targetUrl, directUrl, filename, fileSize, abortFlag)) {
             link.directUrl = directUrl;
             if (!filename.empty()) link.filename = filename;
+            if (fileSize > 0) link.fileSize = fileSize;
             link.status = LinkStatus::Resolved;
             link.statusMessage = L"직링크 준비 완료 (초고속 CDN)";
             return true;
         } else {
-            // Even if direct post resolution failed, we still have the valid send.now intermediate URL
             link.directUrl = targetUrl;
             link.filename = HttpEngine::ExtractFilenameFromUrl(targetUrl);
             link.status = LinkStatus::Resolved;
             link.statusMessage = L"Send.now 링크 준비 완료";
             return true;
         }
+    } else if (link.hostName == L"1Fichier") {
+        std::wstring directUrl;
+        std::wstring filename;
+        int64_t fileSize = 0;
+        if (Resolve1Fichier(targetUrl, directUrl, filename, fileSize, abortFlag)) {
+            link.directUrl = directUrl;
+            if (!filename.empty()) link.filename = filename;
+            if (fileSize > 0) link.fileSize = fileSize;
+            link.status = LinkStatus::Resolved;
+            link.statusMessage = L"직링크 준비 완료 (1Fichier 초고속)";
+            return true;
+        } else {
+            link.directUrl = targetUrl;
+            if (!filename.empty()) link.filename = filename;
+            else link.filename = HttpEngine::ExtractFilenameFromUrl(targetUrl);
+            link.status = LinkStatus::Resolved;
+            link.statusMessage = L"1Fichier 링크 준비 완료 (대기 시간 후 시작)";
+            return true;
+        }
+    } else if (link.hostName == L"Megaup") {
+        std::wstring directUrl;
+        std::wstring filename;
+        int64_t fileSize = 0;
+        bool needsHuman = false;
+        ResolveMegaup(targetUrl, directUrl, filename, fileSize, needsHuman, abortFlag);
+        link.directUrl = directUrl;
+        if (!filename.empty()) link.filename = filename;
+        if (needsHuman) {
+            link.status = LinkStatus::NeedsHumanVerification;
+            link.statusMessage = L"⚠️ 인간 확인 필요 (더블클릭하여 브라우저 열기)";
+        } else {
+            link.status = LinkStatus::Resolved;
+            link.statusMessage = L"Megaup 링크 준비 완료";
+        }
+        return true;
     }
 
-    // Step 3: For other hosts (1Fichier, Megaup, Direct)
+    // Step 3: For other direct hosts
     link.directUrl = targetUrl;
     link.filename = HttpEngine::ExtractFilenameFromUrl(targetUrl);
     link.status = LinkStatus::Resolved;

@@ -8,10 +8,11 @@
 namespace EasyDownload {
 
 enum class LinkStatus {
-    Parsed,       // URL parsed from text
-    Resolving,    // Resolving intermediate / host links
-    Resolved,     // Direct link resolved and ready
-    Failed        // Resolution failed
+    Parsed,                  // URL parsed from text
+    Resolving,               // Resolving intermediate / host links
+    Resolved,                // Direct link resolved and ready
+    NeedsHumanVerification,  // Requires human click (Cloudflare/Captcha in browser)
+    Failed                   // Resolution failed
 };
 
 struct ExtractedLink {
@@ -45,6 +46,8 @@ public:
 private:
     static bool ResolveNswvault(const std::wstring& nswUrl, std::wstring& outTargetUrl, std::wstring& outSize, std::atomic<bool>& abortFlag);
     static bool ResolveSendNow(const std::wstring& sendUrl, std::wstring& outDirectUrl, std::wstring& outFilename, int64_t& outFileSize, std::atomic<bool>& abortFlag);
+    static bool Resolve1Fichier(const std::wstring& fUrl, std::wstring& outDirectUrl, std::wstring& outFilename, int64_t& outFileSize, std::atomic<bool>& abortFlag);
+    static bool ResolveMegaup(const std::wstring& megaUrl, std::wstring& outDirectUrl, std::wstring& outFilename, int64_t& outFileSize, bool& outNeedsHuman, std::atomic<bool>& abortFlag);
 };
 
 } // namespace EasyDownload

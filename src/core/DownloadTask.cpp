@@ -3,6 +3,7 @@
 #include "HlsDownloader.h"
 #include "SextbExtractor.h"
 #include "Av01Extractor.h"
+#include "LinkExtractor.h"
 #include "Settings.h"
 #include <shlobj.h>
 #include <shlwapi.h>
@@ -14,6 +15,25 @@
 #include <algorithm>
 
 namespace EasyDownload {
+
+static bool IsBinaryArchiveFile(const std::wstring& filename) {
+    if (filename.length() < 4) return false;
+    std::wstring lower = filename;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    const wchar_t* exts[] = {
+        L".zip", L".rar", L".7z", L".tar", L".gz", L".iso", L".bin", L".exe",
+        L".nup", L".nsp", L".xci", L".pkg", L".mp4", L".mkv", L".avi", L".mov",
+        L".001", L".002", L".003", L".004", L".005", L".006", L".007", L".008", L".009", L".010",
+        L".011", L".012", L".013", L".014", L".015"
+    };
+    for (const auto* ext : exts) {
+        if (lower.length() >= wcslen(ext) &&
+            lower.compare(lower.length() - wcslen(ext), wcslen(ext), ext) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
 
 static std::wstring GenerateGuid() {
     GUID guid;
@@ -679,8 +699,61 @@ void DownloadTask::WorkerLoop() {
         return;
     }
 
+    // JIT (Just-In-Time) Dynamic Link Resolution before connecting
+    std::wstring orig = GetOriginalUrl();
+    if (!orig.empty()) {
+        bool shouldResolve = false;
+        if (orig.find(L"nswvault.com") != std::wstring::npos ||
+            orig.find(L"send.now") != std::wstring::npos ||
+            orig.find(L"send.cm") != std::wstring::npos ||
+            orig.find(L"1fichier.com") != std::wstring::npos ||
+            orig.find(L"megaup.net") != std::wstring::npos) {
+            // If current URL is intermediate landing page, resolve fresh direct link right now
+            if (m_url == orig ||
+                m_url.find(L"nswvault.com") != std::wstring::npos ||
+                m_url.find(L"1fichier.com/?") != std::wstring::npos ||
+                m_url.find(L"send.now/") != std::wstring::npos ||
+                m_url.find(L"megaup.net/") != std::wstring::npos) {
+                shouldResolve = true;
+            }
+        }
+
+        if (shouldResolve) {
+            ExtractedLink fresh;
+            fresh.originalUrl = orig;
+            fresh.filename = m_filename;
+            if (LinkExtractor::ResolveLink(fresh, m_abortFlag)) {
+                if (!fresh.directUrl.empty()) {
+                    std::lock_guard<std::mutex> lk(m_metaMutex);
+                    m_url = fresh.directUrl;
+                    if (!fresh.filename.empty() && HttpEngine::IsGenericFilename(m_filename)) {
+                        m_filename = fresh.filename;
+                    }
+                }
+            }
+        }
+    }
+
     HttpHeadInfo info;
-    if (!HttpEngine::QueryUrlInfo(m_url, m_referer, m_cookies, info)) {
+    bool queryOk = HttpEngine::QueryUrlInfo(m_url, m_referer, m_cookies, info);
+
+    // If query failed or returned 401/403/404/410, try dynamic re-resolution once in case direct URL expired (TTL)
+    if (!queryOk || info.statusCode >= 400) {
+        if (!orig.empty() && orig != m_url) {
+            ExtractedLink retryLink;
+            retryLink.originalUrl = orig;
+            retryLink.filename = m_filename;
+            if (LinkExtractor::ResolveLink(retryLink, m_abortFlag) && !retryLink.directUrl.empty()) {
+                {
+                    std::lock_guard<std::mutex> lk(m_metaMutex);
+                    m_url = retryLink.directUrl;
+                }
+                queryOk = HttpEngine::QueryUrlInfo(m_url, m_referer, m_cookies, info);
+            }
+        }
+    }
+
+    if (!queryOk) {
         m_status = TaskStatus::Error;
         {
             std::lock_guard<std::mutex> lk(m_metaMutex);
@@ -694,7 +767,29 @@ void DownloadTask::WorkerLoop() {
         m_status = TaskStatus::Error;
         {
             std::lock_guard<std::mutex> lk(m_metaMutex);
-            m_errorMessage = L"HTTP 오류 코드: " + std::to_wstring(info.statusCode);
+            if (info.statusCode == 403 && (m_url.find(L"megaup.net") != std::wstring::npos || orig.find(L"megaup.net") != std::wstring::npos)) {
+                m_errorMessage = L"인간 확인(Cloudflare Turnstile) 차단 페이지 감지 (더블클릭하여 브라우저에서 인증 필요)";
+            } else {
+                m_errorMessage = L"HTTP 오류 코드: " + std::to_wstring(info.statusCode);
+            }
+        }
+        if (m_onStatusChanged) m_onStatusChanged(this);
+        return;
+    }
+
+    // HTML Landing Page Guard:
+    // If the expected target file is a binary archive/media (.zip, .rar, .001, .002, .nup, etc.),
+    // but the server returned 'text/html' with small size (< 10MB), do NOT save a fake HTML file!
+    std::wstring contentTypeLower = info.contentType;
+    std::transform(contentTypeLower.begin(), contentTypeLower.end(), contentTypeLower.begin(), ::tolower);
+    bool isHtml = (contentTypeLower.find(L"text/html") != std::wstring::npos);
+    bool isBinary = IsBinaryArchiveFile(m_filename) || IsBinaryArchiveFile(m_savePath) || IsBinaryArchiveFile(orig);
+
+    if (isHtml && isBinary && info.contentLength < 10 * 1024 * 1024) {
+        m_status = TaskStatus::Error;
+        {
+            std::lock_guard<std::mutex> lk(m_metaMutex);
+            m_errorMessage = L"웹페이지 또는 인간 확인(Cloudflare) 차단 페이지 감지 (더블클릭하여 브라우저에서 인증 필요)";
         }
         if (m_onStatusChanged) m_onStatusChanged(this);
         return;
