@@ -812,3 +812,22 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
   1. 링크 추출기(`LinkExtractor::ResolveMegaup`)에서 `download.megaup.net`과 같이 Turnstile 게이트가 존재하는 호스트를 감지하면 링크 상태를 `LinkStatus::NeedsHumanVerification`으로 지정하고 `⚠️ 인간 확인 필요 (더블클릭하여 브라우저 열기)`로 명확히 표시할 것.
   2. 일괄 추출 리스트뷰 및 메인 다운로드 리스트뷰에서 해당 항목을 더블클릭(`NM_DBLCLK`)하거나 우클릭 메뉴를 선택하면, 기본 브라우저(`ShellExecuteW`)로 해당 랜딩 페이지를 즉시 열어줄 것.
   3. 사용자가 브라우저에서 챌린지를 클릭하여 정당하게 통과하고 다운로드 버튼을 누르면, 백그라운드에 상주하는 EasyDownload 크롬 확장 프로그램이 브라우저 쿠키와 함께 해당 직링크를 자동 가로채서 EasyDownload 메인 창으로 즉시 전달(In-place Intercept)하여 6 GB 파일이 안전하게 다운로드되도록 완결할 것.
+
+---
+
+### 🛑 창 조작/마우스 클릭 시 프로그램 멈춤(Freezing) 및 타이머 중단 방지 원칙 (Zero-Freeze UI)
+- **실제 실수 및 문제**:
+  1. **마우스 클릭 시 모달 루프로 인한 타이머 멈춤**: 사용자가 창의 제목 표시줄(타이틀바), 창 테두리, 리스트뷰를 마우스 왼쪽 버튼으로 꾹 누르고 있으면 Windows `DefWindowProc` 내부의 마우스 추적 모달 루프가 실행됨. 이때 `WM_TIMER`는 메시지 큐의 최하위 우선순위이므로 메시지 디스패치가 지연되어 다운로드 속도와 화면 갱신이 마우스를 누르고 있는 동안 완전히 멈춘 것처럼 얼어붙음.
+  2. **`AttachThreadInput`으로 인한 UI 스레드 영구 프리징(응답 없음)**: 외부 프로세스(크롬 등)로부터 창을 화면 맨 앞으로 띄우기 위해 `AttachThreadInput`을 사용했으나, 상대 스레드가 비정상 상태이거나 동기화 경합 시 호출 스레드(우리 UI 스레드)까지 함께 데드락(Deadlock)에 걸려 창을 클릭하는 순간 프로그램 전체가 '응답 없음'으로 뻗어버림.
+  3. **리스트뷰 클릭 시 이벤트 폭주**: 항목 클릭 시 `LVN_ITEMCHANGED`가 무차별 발생하여 무거운 세그먼트바 재계산이 연쇄 실행되면서 마우스 반응이 둔화됨.
+- **방지 원칙 (Zero-Freeze & Smooth UX 파이프라인)**:
+  1. **타이머 콜백 프로시저(`TIMERPROC`) 직접 연결**:
+     - `SetTimer(m_hWnd, ID_TIMER_UPDATE, 250, UpdateTimerProc);`와 같이 정적 타이머 콜백(`TIMERPROC`)을 필수로 지정할 것.
+     - `TIMERPROC`이 지정되면 `DispatchMessage`가 윈도우 프로시저를 거치지 않고 타이머 콜백을 다이렉트로 즉시 실행하므로, 사용자가 창 타이틀바를 꾹 누르고 있거나 창을 드래그하는 중에도 실시간 속도 갱신이 0.1초의 멈춤 없이 100% 매끄럽게 작동함.
+  2. **창 이동/크기 조절 중 무거운 UI 갱신 일시 스킵 (`WM_ENTERSIZEMOVE` / `WM_EXITSIZEMOVE`)**:
+     - `m_isDraggingOrSizing` 불리언 가드를 두고 창을 드래그하거나 리사이징하는 동안에는 리스트뷰 전체 텍스트 재작성을 생략하고 상태표시줄만 갱신하여 마우스 드래그 시 덜컹거림(Jitter)과 깜빡임을 원천 차단할 것.
+  3. **`AttachThreadInput` 영구 퇴출**:
+     - 데드락의 원흉인 `AttachThreadInput`을 코드베이스에서 영구히 삭제할 것.
+     - `AllowSetForegroundWindow(ASFW_ANY)` + `SetWindowPos(HWND_TOPMOST -> HWND_NOTOPMOST)` + `BringWindowToTop` + `SetForegroundWindow`의 안전한 비차단 표준 조합만 사용하여 0ms 안전 활성화를 보장할 것.
+  4. **`LVN_ITEMCHANGED` 실제 선택 변경 필터링**:
+     - `(pnmv->uChanged & LVIF_STATE) && (pnmv->uNewState & LVIS_SELECTED)`일 때만 반응하도록 엄격히 가드를 쳐 불필요한 이벤트 폭주를 방어할 것.

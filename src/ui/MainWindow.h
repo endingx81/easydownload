@@ -7,7 +7,6 @@
 #include <memory>
 #include <atomic>
 #include "../core/DownloadTask.h"
-#include "../core/LinkExtractor.h"
 
 namespace EasyDownload {
 
@@ -24,6 +23,7 @@ private:
     ~MainWindow();
 
     static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+    static VOID CALLBACK UpdateTimerProc(HWND hWnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime);
     LRESULT HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam);
 
     void InitControls();
@@ -52,49 +52,19 @@ private:
     void UpdateDpiBypassUi();
     void OnToggleChromeDoh();
 
-    // Batch Extractor Handlers
-    void InitBatchControls();
-    void SwitchTab(int tabIndex);
-    void RelayoutBatch(int width, int topY, int bottomY);
-    void OnBatchAnalyze();
-    void OnBatchAdd(bool onlySelected);
-    void OnBatchClear();
-    void OnBatchPaste();
-    void UpdateBatchListItem(int index);
-    static LRESULT CALLBACK BatchEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
-
     HWND m_hWnd{ NULL };
     HWND m_hToolbar{ NULL };
-    HWND m_hTabCtrl{ NULL };
     HWND m_hListView{ NULL };
     HWND m_hSegmentBar{ NULL };
     HWND m_hStatusBar{ NULL };
 
-    // Batch Controls
-    HWND m_hBatchGuideLbl{ NULL };
-    HWND m_hBatchBtnPaste{ NULL };
-    HWND m_hBatchTextEdit{ NULL };
-    HWND m_hBatchHostLbl{ NULL };
-    HWND m_hBatchHostCombo{ NULL };
-    HWND m_hBatchSeqCheck{ NULL };
-    HWND m_hBatchBtnAnalyze{ NULL };
-    HWND m_hBatchListView{ NULL };
-    HWND m_hBatchBtnAddSelected{ NULL };
-    HWND m_hBatchBtnAddAll{ NULL };
-    HWND m_hBatchBtnClear{ NULL };
-    HWND m_hBatchStatusLbl{ NULL };
-
     HFONT m_hFont{ NULL };
     HFONT m_hBoldFont{ NULL };
-
-    int m_currentTab{ 0 }; // 0: Downloads, 1: Batch Extractor
-    std::vector<ExtractedLink> m_batchLinks;
-    std::atomic<bool> m_batchAbortFlag{ false };
-    bool m_batchAnalyzing{ false };
 
     UINT m_dpi{ 96 };
     NOTIFYICONDATAW m_nid{};
     bool m_trayActive{ false };
+    bool m_isDraggingOrSizing{ false };
 
     std::wstring m_selectedTaskId;
 };

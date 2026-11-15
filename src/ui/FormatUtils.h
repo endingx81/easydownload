@@ -87,28 +87,14 @@ inline void ForceForegroundWindow(HWND hWnd) {
         ShowWindow(hWnd, SW_SHOW);
     }
 
-    // Bypass Windows LockSetForegroundWindow by temporarily attaching to the current foreground thread
-    HWND hFore = GetForegroundWindow();
-    DWORD foreThread = hFore ? GetWindowThreadProcessId(hFore, NULL) : 0;
-    DWORD curThread = GetCurrentThreadId();
-
-    if (foreThread != 0 && foreThread != curThread) {
-        AttachThreadInput(curThread, foreThread, TRUE);
-        SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-        SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-        BringWindowToTop(hWnd);
-        SetForegroundWindow(hWnd);
-        SetActiveWindow(hWnd);
-        SetFocus(hWnd);
-        AttachThreadInput(curThread, foreThread, FALSE);
-    } else {
-        SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-        SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-        BringWindowToTop(hWnd);
-        SetForegroundWindow(hWnd);
-        SetActiveWindow(hWnd);
-        SetFocus(hWnd);
-    }
+    // Safe, non-blocking foreground elevation (NO AttachThreadInput deadlock!)
+    AllowSetForegroundWindow(ASFW_ANY);
+    SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    BringWindowToTop(hWnd);
+    SetForegroundWindow(hWnd);
+    SetActiveWindow(hWnd);
+    SetFocus(hWnd);
 }
 
 } // namespace EasyDownload
