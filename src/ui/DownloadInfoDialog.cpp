@@ -82,7 +82,7 @@ INT_PTR CALLBACK DownloadInfoDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM wPa
         SetDlgItemTextW(hDlg, IDC_LBL_INFO_PARTS, partsStr.c_str());
 
         SetDlgItemTextW(hDlg, IDC_EDT_INFO_SAVEPATH, spTask->GetSavePath().c_str());
-        SetDlgItemTextW(hDlg, IDC_EDT_INFO_URL, spTask->GetUrl().c_str());
+        SetDlgItemTextW(hDlg, IDC_EDT_INFO_URL, spTask->GetDisplayUrl().c_str());
 
         SetDlgItemTextW(hDlg, IDC_LBL_INFO_CREATED, spTask->GetCreatedAt().c_str());
         SetDlgItemTextW(hDlg, IDC_LBL_INFO_COMPLETED, spTask->GetCompletedAt().empty() ? L"-" : spTask->GetCompletedAt().c_str());

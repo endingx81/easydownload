@@ -232,6 +232,8 @@ void LocalServer::HandleClient(SOCKET clientSock) {
 
             DownloadRequest req;
             req.url = ExtractJsonString(body, "url");
+            req.originalUrl = ExtractJsonString(body, "originalUrl");
+            if (req.originalUrl.empty()) req.originalUrl = req.url;
             req.filename = ExtractJsonString(body, "filename");
             req.referer = ExtractJsonString(body, "referer");
             req.cookies = ExtractJsonString(body, "cookies");

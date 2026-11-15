@@ -241,8 +241,10 @@ async function handleDownloadIntercept(item) {
 
   // Forward to EasyDownload desktop core
   try {
+    const origUrl = item.url || item.referrer || targetUrl;
     const payload = {
       url: targetUrl,
+      originalUrl: origUrl,
       filename: resolvedFilename,
       referer: referer,
       cookies: cookiesStr,
@@ -664,6 +666,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           url: targetUrl,
+          originalUrl: targetUrl,
           filename: "",
           referer: tab ? tab.url : "",
           cookies: cookiesStr,
@@ -819,6 +822,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: msg.url,
+        originalUrl: msg.originalUrl || msg.url,
         filename: msg.filename || "",
         referer: msg.referer || (sender && sender.tab ? sender.tab.url : ""),
         cookies: msg.cookies || "",

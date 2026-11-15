@@ -1189,4 +1189,103 @@ bool HttpEngine::IsSingleConnectionHost(const std::wstring& url, const std::wstr
     return match(url) || match(originalUrl);
 }
 
+std::wstring HttpEngine::UrlDecodeUtf8(const std::wstring& str) {
+    if (str.empty()) return L"";
+
+    auto hexVal = [](wchar_t c) -> int {
+        if (c >= L'0' && c <= L'9') return c - L'0';
+        if (c >= L'a' && c <= L'f') return c - L'a' + 10;
+        if (c >= L'A' && c <= L'F') return c - L'A' + 10;
+        return -1;
+    };
+
+    std::string utf8Bytes;
+    utf8Bytes.reserve(str.length());
+
+    for (size_t i = 0; i < str.length(); ++i) {
+        if (str[i] == L'%' && i + 2 < str.length()) {
+            int h1 = hexVal(str[i + 1]);
+            int h2 = hexVal(str[i + 2]);
+            if (h1 >= 0 && h2 >= 0) {
+                utf8Bytes.push_back((char)((h1 << 4) | h2));
+                i += 2;
+                continue;
+            }
+        }
+
+        wchar_t wc = str[i];
+        if (wc < 128) {
+            utf8Bytes.push_back((char)wc);
+        } else {
+            char mb[8] = { 0 };
+            int len = WideCharToMultiByte(CP_UTF8, 0, &wc, 1, mb, sizeof(mb), NULL, NULL);
+            if (len > 0) {
+                utf8Bytes.append(mb, len);
+            }
+        }
+    }
+
+    if (utf8Bytes.empty()) return L"";
+    int szNeeded = MultiByteToWideChar(CP_UTF8, 0, utf8Bytes.data(), (int)utf8Bytes.size(), NULL, 0);
+    if (szNeeded <= 0) return str;
+
+    std::wstring result(szNeeded, 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8Bytes.data(), (int)utf8Bytes.size(), &result[0], szNeeded);
+    return result;
+}
+
+std::wstring HttpEngine::FormatDisplayUrl(const std::wstring& rawUrl) {
+    if (rawUrl.empty()) return L"";
+
+    // 1. Decode UTF-8 percent-encoding (%20 -> space, %ED%95... -> 한...)
+    std::wstring decoded = UrlDecodeUtf8(rawUrl);
+
+    // 2. If URL contains query parameters, check for bloated tokens
+    size_t qPos = decoded.find(L'?');
+    if (qPos != std::wstring::npos) {
+        std::wstring baseUrl = decoded.substr(0, qPos);
+        std::wstring query = decoded.substr(qPos + 1);
+
+        // Parse query params (separated by &)
+        std::wstring cleanQuery;
+        size_t start = 0;
+        while (start < query.length()) {
+            size_t ampPos = query.find(L'&', start);
+            std::wstring param = (ampPos == std::wstring::npos) ? query.substr(start) : query.substr(start, ampPos - start);
+
+            size_t eqPos = param.find(L'=');
+            if (eqPos != std::wstring::npos) {
+                std::wstring key = param.substr(0, eqPos);
+                std::wstring val = param.substr(eqPos + 1);
+
+                // Check for sensitive or giant token/hashes (> 32 chars or token/hash names)
+                std::wstring lowerKey = key;
+                for (auto& c : lowerKey) c = towlower(c);
+
+                bool isToken = (lowerKey.find(L"token") != std::wstring::npos ||
+                                lowerKey.find(L"auth") != std::wstring::npos ||
+                                lowerKey.find(L"sig") != std::wstring::npos ||
+                                lowerKey.find(L"hash") != std::wstring::npos ||
+                                lowerKey.find(L"session") != std::wstring::npos ||
+                                val.length() > 32);
+
+                if (isToken && val.length() > 16) {
+                    val = val.substr(0, 10) + L"...";
+                }
+                param = key + L"=" + val;
+            }
+
+            if (!cleanQuery.empty()) cleanQuery += L"&";
+            cleanQuery += param;
+
+            if (ampPos == std::wstring::npos) break;
+            start = ampPos + 1;
+        }
+
+        decoded = baseUrl + (cleanQuery.empty() ? L"" : L"?" + cleanQuery);
+    }
+
+    return decoded;
+}
+
 } // namespace EasyDownload

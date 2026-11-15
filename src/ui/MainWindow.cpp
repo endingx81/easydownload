@@ -325,7 +325,8 @@ void MainWindow::UpdateTasksRealtime() {
         ListView_SetItemText(m_hListView, i, 6, (LPWSTR)partsStr.c_str());
 
         // Col 7: URL
-        ListView_SetItemText(m_hListView, i, 7, (LPWSTR)t->GetUrl().c_str());
+        std::wstring dispUrl = t->GetDisplayUrl();
+        ListView_SetItemText(m_hListView, i, 7, (LPWSTR)dispUrl.c_str());
 
         // Col 8: CreatedAt
         ListView_SetItemText(m_hListView, i, 8, (LPWSTR)t->GetCreatedAt().c_str());
@@ -697,7 +698,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             DestroyWindow(m_hWnd);
             break;
         case ID_ABOUT:
-            MessageBoxW(m_hWnd, L"EasyDownload v1.5.6\n\n초고속 멀티스레드 분할 다운로드 가속기\n크롬 확장 연동 및 비디오 스트림 다운로더\nYouTube / M3U8 고화질 자동 병합 다운로더\nChrome 보안 DNS(DoH) & DPI 차단 우회 내장",
+            MessageBoxW(m_hWnd, L"EasyDownload v1.5.7\n\n초고속 멀티스레드 분할 다운로드 가속기\n크롬 확장 연동 및 비디오 스트림 다운로더\nYouTube / M3U8 고화질 자동 병합 다운로더\nChrome 보안 DNS(DoH) & DPI 차단 우회 내장",
                 L"EasyDownload 정보", MB_OK | MB_ICONINFORMATION);
             break;
         }
@@ -820,7 +821,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             WCHAR combined[MAX_PATH] = { 0 };
             PathCombineW(combined, baseDir.c_str(), fname.c_str());
 
-            auto task = DownloadManager::Instance().AddTask(req->url, combined, req->referer, req->cookies, 8, true, false, L"", req->userAgent);
+            auto task = DownloadManager::Instance().AddTask(req->url, combined, req->referer, req->cookies, 8, true, false, L"", req->userAgent, req->originalUrl);
             if (task && isYouTube) {
                 task->SetIsYouTube(true);
             }

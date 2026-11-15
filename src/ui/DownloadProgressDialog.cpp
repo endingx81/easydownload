@@ -87,7 +87,7 @@ INT_PTR CALLBACK DownloadProgressDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM
         // Set Labels
         SetDlgItemTextW(hDlg, IDC_LBL_PROG_FILENAME, pTask->GetFilename().c_str());
         SetDlgItemTextW(hDlg, IDC_LBL_PROG_SAVETO, pTask->GetSavePath().c_str());
-        SetDlgItemTextW(hDlg, IDC_LBL_PROG_URL, pTask->GetUrl().c_str());
+        SetDlgItemTextW(hDlg, IDC_LBL_PROG_URL, pTask->GetDisplayUrl().c_str());
 
         // Initialize Progress Bar
         HWND hPrg = GetDlgItem(hDlg, IDC_PRG_PROGRESS);

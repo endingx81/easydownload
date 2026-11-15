@@ -13,6 +13,7 @@ namespace EasyDownload {
 
 struct DownloadRequest {
     std::wstring url;
+    std::wstring originalUrl;
     std::wstring filename;
     std::wstring referer;
     std::wstring cookies;

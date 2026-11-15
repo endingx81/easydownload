@@ -173,6 +173,11 @@ public:
         std::lock_guard<std::mutex> lock(m_metaMutex);
         return !m_originalUrl.empty() ? m_originalUrl : m_url;
     }
+    void SetOriginalUrl(const std::wstring& origUrl) {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        m_originalUrl = origUrl;
+    }
+    std::wstring GetDisplayUrl() const;
     std::wstring GetSavePath() const {
         std::lock_guard<std::mutex> lock(m_metaMutex);
         return m_savePath;

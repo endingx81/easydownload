@@ -22,7 +22,8 @@ public:
         bool startImmediately = true,
         bool isHls = false,
         const std::wstring& dependsOnId = L"",
-        const std::wstring& userAgent = L""
+        const std::wstring& userAgent = L"",
+        const std::wstring& originalUrl = L""
     );
 
     bool StartTask(const std::wstring& id);

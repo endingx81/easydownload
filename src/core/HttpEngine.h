@@ -84,6 +84,8 @@ public:
     static bool IsGenericFilename(const std::wstring& name);
     static std::wstring ExtractTitleFromRefererUrl(const std::wstring& refererUrl);
     static bool IsSingleConnectionHost(const std::wstring& url, const std::wstring& originalUrl = L"");
+    static std::wstring UrlDecodeUtf8(const std::wstring& str);
+    static std::wstring FormatDisplayUrl(const std::wstring& rawUrl);
 };
 
 } // namespace EasyDownload

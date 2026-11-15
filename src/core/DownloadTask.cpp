@@ -1354,4 +1354,17 @@ void DownloadTask::WorkerLoop() {
     if (m_onStatusChanged) m_onStatusChanged(this);
 }
 
+std::wstring DownloadTask::GetDisplayUrl() const {
+    std::wstring displayTarget;
+    {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        if (!m_originalUrl.empty()) {
+            displayTarget = m_originalUrl;
+        } else {
+            displayTarget = m_url;
+        }
+    }
+    return HttpEngine::FormatDisplayUrl(displayTarget);
+}
+
 } // namespace EasyDownload
