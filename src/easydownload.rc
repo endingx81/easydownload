@@ -254,11 +254,11 @@ BEGIN
     BEGIN
         BLOCK "041204b0"
         BEGIN
-            VALUE "CompanyName", "EasyDownload Project"
+            VALUE "CompanyName", "ai-open.kr"
             VALUE "FileDescription", "EasyDownload"
             VALUE "FileVersion", "1.4.6.0"
             VALUE "InternalName", "easydownload.exe"
-            VALUE "LegalCopyright", "Copyright (C) 2026. All rights reserved."
+            VALUE "LegalCopyright", "Copyright (C) 2026 ai-open.kr. All rights reserved."
             VALUE "OriginalFilename", "easydownload.exe"
             VALUE "ProductName", "EasyDownload"
             VALUE "ProductVersion", "1.4.6.0"
