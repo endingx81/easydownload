@@ -29,11 +29,18 @@ struct ExtractedLink {
 
 class LinkExtractor {
 public:
-    // Parse bulk text (markdown links, raw URLs, host sections)
+    // Parse bulk text (markdown links, raw URLs, host sections, HTML anchors)
     static std::vector<ExtractedLink> ParseRawText(const std::wstring& rawText, const std::wstring& hostFilter = L"");
 
     // Resolve intermediate redirects (e.g. nswvault -> send.now -> direct datatransfer.to URL)
     static bool ResolveLink(ExtractedLink& link, std::atomic<bool>& abortFlag);
+
+    // Convert HTML (clipboard fragment or raw markup) into Markdown formatted links [label](url)
+    static std::wstring ConvertHtmlToMarkdown(const std::string& htmlUtf8);
+    static std::wstring ConvertHtmlToMarkdown(const std::wstring& wHtml);
+
+    // Retrieve text from clipboard, automatically converting HTML format with hyperlinks if available
+    static std::wstring GetSmartClipboardText();
 
 private:
     static bool ResolveNswvault(const std::wstring& nswUrl, std::wstring& outTargetUrl, std::wstring& outSize, std::atomic<bool>& abortFlag);
@@ -41,3 +48,4 @@ private:
 };
 
 } // namespace EasyDownload
+

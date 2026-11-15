@@ -25,12 +25,136 @@ static std::wstring UnescapeHtmlEntities(const std::wstring& str) {
     replaceAll(L"&apos;", L"'");
     replaceAll(L"&lt;", L"<");
     replaceAll(L"&gt;", L">");
+    replaceAll(L"&nbsp;", L" ");
     return s;
+}
+
+std::wstring LinkExtractor::ConvertHtmlToMarkdown(const std::string& htmlUtf8) {
+    if (htmlUtf8.empty()) return L"";
+
+    size_t sIdx = 0;
+    size_t eIdx = htmlUtf8.size();
+    size_t sfPos = htmlUtf8.find("StartFragment:");
+    if (sfPos != std::string::npos) {
+        sIdx = (size_t)atoi(htmlUtf8.c_str() + sfPos + 14);
+    }
+    size_t efPos = htmlUtf8.find("EndFragment:");
+    if (efPos != std::string::npos) {
+        eIdx = (size_t)atoi(htmlUtf8.c_str() + efPos + 12);
+    }
+
+    std::string fragment;
+    if (sIdx < htmlUtf8.size() && eIdx <= htmlUtf8.size() && sIdx < eIdx) {
+        fragment = htmlUtf8.substr(sIdx, eIdx - sIdx);
+    } else {
+        fragment = htmlUtf8;
+    }
+
+    int wideLen = MultiByteToWideChar(CP_UTF8, 0, fragment.data(), (int)fragment.size(), NULL, 0);
+    if (wideLen <= 0) return L"";
+    std::wstring wText(wideLen, 0);
+    MultiByteToWideChar(CP_UTF8, 0, fragment.data(), (int)fragment.size(), &wText[0], wideLen);
+
+    return ConvertHtmlToMarkdown(wText);
+}
+
+std::wstring LinkExtractor::ConvertHtmlToMarkdown(const std::wstring& wText) {
+    if (wText.empty()) return L"";
+
+    // 1. Replace <a ... href="...">...</a> with [text](url)
+    std::wregex aRegex(L"<a\\s+[^>]*?href=[\"']([^\"']+)[\"'][^>]*?>(.*?)<\\/a>", std::regex_constants::icase);
+    std::wstring withLinks;
+    auto it = std::wsregex_iterator(wText.begin(), wText.end(), aRegex);
+    auto end = std::wsregex_iterator();
+    size_t lastPos = 0;
+    for (; it != end; ++it) {
+        std::wsmatch m = *it;
+        withLinks.append(wText, lastPos, m.position(0) - lastPos);
+        std::wstring href = UnescapeHtmlEntities(m[1].str());
+        std::wstring inner = m[2].str();
+
+        // Strip any inner nested tags
+        std::wregex tagRegex(L"<[^>]+>");
+        inner = std::regex_replace(inner, tagRegex, L"");
+        inner = UnescapeHtmlEntities(inner);
+
+        // Trim inner
+        size_t first = inner.find_first_not_of(L" \t\r\n");
+        size_t last = inner.find_last_not_of(L" \t\r\n");
+        if (first != std::wstring::npos && last != std::wstring::npos) {
+            inner = inner.substr(first, last - first + 1);
+        }
+        withLinks += L"[" + inner + L"](" + href + L")";
+        lastPos = m.position(0) + m.length(0);
+    }
+    withLinks.append(wText, lastPos, wText.size() - lastPos);
+
+    // 2. Replace <br>, </p>, </div>, </tr>, </li> with \r\n
+    std::wregex brRegex(L"<(?:br|/p|/div|/tr|/li)[^>]*>", std::regex_constants::icase);
+    withLinks = std::regex_replace(withLinks, brRegex, L"\r\n");
+
+    // 3. Strip remaining HTML tags
+    std::wregex tagRegex(L"<[^>]+>");
+    withLinks = std::regex_replace(withLinks, tagRegex, L"");
+
+    // 4. Unescape all remaining entities
+    withLinks = UnescapeHtmlEntities(withLinks);
+
+    // 5. Clean up excessive newlines
+    std::wregex emptyLinesRegex(L"(\r?\n\\s*){2,}");
+    withLinks = std::regex_replace(withLinks, emptyLinesRegex, L"\r\n");
+
+    return withLinks;
+}
+
+std::wstring LinkExtractor::GetSmartClipboardText() {
+    if (!OpenClipboard(NULL)) {
+        return L"";
+    }
+
+    std::wstring result;
+    static UINT uFormatHtml = RegisterClipboardFormatW(L"HTML Format");
+
+    if (uFormatHtml != 0 && IsClipboardFormatAvailable(uFormatHtml)) {
+        HANDLE hData = GetClipboardData(uFormatHtml);
+        if (hData) {
+            const char* pData = (const char*)GlobalLock(hData);
+            if (pData) {
+                size_t len = strlen(pData);
+                std::string htmlStr(pData, len);
+                GlobalUnlock(hData);
+
+                std::wstring md = ConvertHtmlToMarkdown(htmlStr);
+                if (md.find(L"](") != std::wstring::npos) {
+                    result = md;
+                }
+            }
+        }
+    }
+
+    if (result.empty() && IsClipboardFormatAvailable(CF_UNICODETEXT)) {
+        HANDLE hData = GetClipboardData(CF_UNICODETEXT);
+        if (hData) {
+            const WCHAR* pText = (const WCHAR*)GlobalLock(hData);
+            if (pText) {
+                result = pText;
+                GlobalUnlock(hData);
+            }
+        }
+    }
+
+    CloseClipboard();
+    return result;
 }
 
 std::vector<ExtractedLink> LinkExtractor::ParseRawText(const std::wstring& rawText, const std::wstring& hostFilter) {
     std::vector<ExtractedLink> results;
     if (rawText.empty()) return results;
+
+    std::wstring textToScan = rawText;
+    if (textToScan.find(L"<a ") != std::wstring::npos || textToScan.find(L"<A ") != std::wstring::npos) {
+        textToScan = ConvertHtmlToMarkdown(textToScan);
+    }
 
     // Split text into host blocks if labeled like "Send: ... 1Fichier: ... Megaup: ..."
     // Common host prefixes
@@ -42,7 +166,7 @@ std::vector<ExtractedLink> LinkExtractor::ParseRawText(const std::wstring& rawTe
 
     auto findSections = [&](const std::wstring& prefix, const std::wstring& canonicalName) {
         size_t pos = 0;
-        while ((pos = rawText.find(prefix, pos)) != std::wstring::npos) {
+        while ((pos = textToScan.find(prefix, pos)) != std::wstring::npos) {
             sections.push_back({ pos, canonicalName });
             pos += prefix.length();
         }
@@ -78,7 +202,7 @@ std::vector<ExtractedLink> LinkExtractor::ParseRawText(const std::wstring& rawTe
     // 1. Try Markdown links: [Label](URL) (Size)
     // Example: [Part.1](https://nswvault.com/.../1) (6 GB)
     std::wregex mdRegex(L"\\[([^\\]]+)\\]\\((https?://[^\\)\\s]+)\\)(?:\\s*\\(([0-9.]+\\s*[GMK]B)\\))?");
-    auto mdBegin = std::wsregex_iterator(rawText.begin(), rawText.end(), mdRegex);
+    auto mdBegin = std::wsregex_iterator(textToScan.begin(), textToScan.end(), mdRegex);
     auto mdEnd = std::wsregex_iterator();
 
     int partCounter = 1;
@@ -122,7 +246,7 @@ std::vector<ExtractedLink> LinkExtractor::ParseRawText(const std::wstring& rawTe
     // 2. If no markdown links were found, parse raw bare URLs line by line
     if (results.empty()) {
         std::wregex urlRegex(L"(https?://[^\\s<>'\"\\)]+)");
-        auto urlBegin = std::wsregex_iterator(rawText.begin(), rawText.end(), urlRegex);
+        auto urlBegin = std::wsregex_iterator(textToScan.begin(), textToScan.end(), urlRegex);
         auto urlEnd = std::wsregex_iterator();
 
         int counter = 1;

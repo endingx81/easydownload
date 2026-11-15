@@ -149,3 +149,4 @@
 #define IDC_BTN_BATCH_ADD_ALL           3510
 #define IDC_BTN_BATCH_CLEAR             3511
 #define IDC_LBL_BATCH_STATUS            3512
+#define IDC_BTN_BATCH_PASTE             3513

@@ -58,7 +58,9 @@ private:
     void OnBatchAnalyze();
     void OnBatchAdd(bool onlySelected);
     void OnBatchClear();
+    void OnBatchPaste();
     void UpdateBatchListItem(int index);
+    static LRESULT CALLBACK BatchEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
 
     HWND m_hWnd{ NULL };
     HWND m_hToolbar{ NULL };
@@ -69,6 +71,7 @@ private:
 
     // Batch Controls
     HWND m_hBatchGuideLbl{ NULL };
+    HWND m_hBatchBtnPaste{ NULL };
     HWND m_hBatchTextEdit{ NULL };
     HWND m_hBatchHostLbl{ NULL };
     HWND m_hBatchHostCombo{ NULL };

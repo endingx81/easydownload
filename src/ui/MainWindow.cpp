@@ -245,12 +245,20 @@ void MainWindow::InitBatchControls() {
     );
     SendMessage(m_hBatchGuideLbl, WM_SETFONT, (WPARAM)m_hBoldFont, TRUE);
 
+    m_hBatchBtnPaste = CreateWindowExW(
+        0, L"BUTTON", L"📋 클립보드 붙여넣기 (웹 링크 복원)",
+        WS_CHILD | BS_PUSHBUTTON,
+        0, 0, 0, 0, m_hWnd, (HMENU)IDC_BTN_BATCH_PASTE, hInst, NULL
+    );
+    SendMessage(m_hBatchBtnPaste, WM_SETFONT, (WPARAM)m_hBoldFont, TRUE);
+
     m_hBatchTextEdit = CreateWindowExW(
         WS_EX_CLIENTEDGE, L"EDIT", L"",
         WS_CHILD | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
         0, 0, 0, 0, m_hWnd, (HMENU)IDC_EDT_BATCH_INPUT, hInst, NULL
     );
     SendMessage(m_hBatchTextEdit, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+    SetWindowSubclass(m_hBatchTextEdit, BatchEditSubclassProc, 1, 0);
 
     m_hBatchHostLbl = CreateWindowExW(
         0, L"STATIC", L"호스트 우선순위:",
@@ -354,6 +362,7 @@ void MainWindow::SwitchTab(int tabIndex) {
     ShowWindow(m_hSegmentBar, showDownloads);
 
     ShowWindow(m_hBatchGuideLbl, showBatch);
+    ShowWindow(m_hBatchBtnPaste, showBatch);
     ShowWindow(m_hBatchTextEdit, showBatch);
     ShowWindow(m_hBatchHostLbl, showBatch);
     ShowWindow(m_hBatchHostCombo, showBatch);
@@ -415,9 +424,12 @@ void MainWindow::RelayoutBatch(int width, int topY, int bottomY) {
     int y = topY + pad;
     int contentW = width - pad * 2;
 
-    // 1. Guide Label
-    SetWindowPos(m_hBatchGuideLbl, NULL, pad, y, contentW, rowH, SWP_NOZORDER);
-    y += rowH;
+    // 1. Guide Label + Paste Button
+    int pasteBtnW = MulDiv(230, m_dpi, 96);
+    int guideW = contentW - pasteBtnW - pad;
+    SetWindowPos(m_hBatchGuideLbl, NULL, pad, y + 4, guideW > 0 ? guideW : contentW, rowH, SWP_NOZORDER);
+    SetWindowPos(m_hBatchBtnPaste, NULL, width - pad - pasteBtnW, y, pasteBtnW, btnH, SWP_NOZORDER);
+    y += btnH + 4;
 
     // 2. Multiline Text Edit
     SetWindowPos(m_hBatchTextEdit, NULL, pad, y, contentW, editH, SWP_NOZORDER);
@@ -958,6 +970,30 @@ void MainWindow::OnBatchClear() {
     SetWindowTextW(m_hBatchStatusLbl, L"초기화되었습니다.");
 }
 
+void MainWindow::OnBatchPaste() {
+    std::wstring smartText = LinkExtractor::GetSmartClipboardText();
+    if (smartText.empty()) {
+        MessageBoxW(m_hWnd, L"클립보드에 복사된 내용이 없습니다.", L"안내", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    SetWindowTextW(m_hBatchTextEdit, smartText.c_str());
+    OnBatchAnalyze();
+}
+
+LRESULT CALLBACK MainWindow::BatchEditSubclassProc(
+    HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+    UINT_PTR uIdSubclass, DWORD_PTR dwRefData
+) {
+    if (uMsg == WM_PASTE) {
+        std::wstring smartText = LinkExtractor::GetSmartClipboardText();
+        if (!smartText.empty() && smartText.find(L"](") != std::wstring::npos) {
+            SendMessageW(hWnd, EM_REPLACESEL, TRUE, (LPARAM)smartText.c_str());
+            return 0;
+        }
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
 LRESULT CALLBACK MainWindow::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     MainWindow* pThis = nullptr;
     if (uMsg == WM_CREATE) {
@@ -1008,6 +1044,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         case ID_TASK_NEW: OnNewDownload(); break;
         case ID_TASK_NEW_VIDEO: OnNewVideoDownload(); break;
         case ID_TASK_BATCH_EXTRACT: SwitchTab(1); break;
+        case IDC_BTN_BATCH_PASTE: OnBatchPaste(); break;
         case IDC_BTN_BATCH_ANALYZE: OnBatchAnalyze(); break;
         case IDC_BTN_BATCH_ADD_SELECTED: OnBatchAdd(true); break;
         case IDC_BTN_BATCH_ADD_ALL: OnBatchAdd(false); break;
