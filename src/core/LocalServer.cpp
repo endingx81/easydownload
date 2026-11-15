@@ -235,6 +235,7 @@ void LocalServer::HandleClient(SOCKET clientSock) {
             req.filename = ExtractJsonString(body, "filename");
             req.referer = ExtractJsonString(body, "referer");
             req.cookies = ExtractJsonString(body, "cookies");
+            req.userAgent = ExtractJsonString(body, "userAgent");
             req.isVideo = (body.find("\"isVideo\":true") != std::string::npos);
 
             if (!req.url.empty() && m_onDownloadRequest) {

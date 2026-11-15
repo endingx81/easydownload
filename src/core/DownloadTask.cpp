@@ -57,13 +57,15 @@ DownloadTask::DownloadTask(
     const std::wstring& savePath,
     const std::wstring& referer,
     const std::wstring& cookies,
-    int numParts
+    int numParts,
+    const std::wstring& userAgent
 ) : m_url(url),
     m_originalUrl(url),
     m_savePath(savePath),
     m_referer(referer),
     m_cookies(cookies),
-    m_numParts(numParts > 0 ? (numParts > 12 ? 12 : numParts) : 8)
+    m_numParts(numParts > 0 ? (numParts > 12 ? 12 : numParts) : 8),
+    m_userAgent(userAgent)
 {
     m_id = GenerateGuid();
     m_createdAt = GetCurrentTimeString();
@@ -336,7 +338,8 @@ void DownloadTask::WorkerThreadFunc(HANDLE hTargetFile) {
                 },
                 &m_fileWriteMutex,
                 pDynEnd,
-                &m_serverLimitHit
+                &m_serverLimitHit,
+                m_userAgent
             );
 
             if (ok || (taskRange.endByte >= 0 && currentOffset > taskRange.endByte)) {
@@ -702,12 +705,19 @@ void DownloadTask::WorkerLoop() {
     // JIT (Just-In-Time) Dynamic Link Resolution before connecting
     std::wstring orig = GetOriginalUrl();
     if (!orig.empty()) {
+        bool isAlreadyDirect =
+            (!m_userAgent.empty() && !m_cookies.empty()) ||
+            (m_url.find(L"download.megaup.net") != std::wstring::npos) ||
+            (m_url.find(L"1fichier.com/c") != std::wstring::npos) ||
+            (m_url.find(L".1fichier.com") != std::wstring::npos && m_url.find(L"1fichier.com/?") == std::wstring::npos);
+
         bool shouldResolve = false;
-        if (orig.find(L"nswvault.com") != std::wstring::npos ||
+        if (!isAlreadyDirect && (
+            orig.find(L"nswvault.com") != std::wstring::npos ||
             orig.find(L"send.now") != std::wstring::npos ||
             orig.find(L"send.cm") != std::wstring::npos ||
             orig.find(L"1fichier.com") != std::wstring::npos ||
-            orig.find(L"megaup.net") != std::wstring::npos) {
+            orig.find(L"megaup.net") != std::wstring::npos)) {
             // If current URL is intermediate landing page, resolve fresh direct link right now
             if (m_url == orig ||
                 m_url.find(L"nswvault.com") != std::wstring::npos ||
@@ -734,8 +744,172 @@ void DownloadTask::WorkerLoop() {
         }
     }
 
+    bool isSingleStream = HttpEngine::IsSingleConnectionHost(m_url, orig) ||
+                          HttpEngine::IsSingleConnectionHost(m_url, m_referer) ||
+                          (m_numParts == 1);
+
+    if (isSingleStream) {
+        m_status = TaskStatus::Downloading;
+        if (m_onStatusChanged) m_onStatusChanged(this);
+
+        m_speedTracker.Reset();
+        m_speedTracker.Update(m_downloadedBytes.load());
+
+        {
+            std::lock_guard<std::mutex> lock(m_chunkMutex);
+            m_chunks.clear();
+            ChunkProgress cp;
+            cp.index = 0;
+            cp.startByte = m_downloadedBytes.load();
+            cp.endByte = m_totalBytes > 0 ? (m_totalBytes - 1) : -1;
+            cp.downloadedBytes = m_downloadedBytes.load();
+            cp.completed = false;
+            m_chunks.push_back(cp);
+        }
+
+        m_activeWorkers = 1;
+        HttpHeadInfo info;
+        HANDLE hTargetFile = INVALID_HANDLE_VALUE;
+
+        bool ok = HttpEngine::DownloadDirectStream(
+            m_url,
+            m_referer,
+            m_cookies,
+            m_userAgent,
+            m_downloadedBytes.load(),
+            m_abortFlag,
+            m_pauseFlag,
+            [this](int64_t bytesRead) {
+                m_downloadedBytes += bytesRead;
+                m_currentSpeed = m_speedTracker.Update(m_downloadedBytes.load());
+                {
+                    std::lock_guard<std::mutex> lock(m_chunkMutex);
+                    if (!m_chunks.empty()) {
+                        m_chunks[0].downloadedBytes = m_downloadedBytes.load();
+                        if (m_totalBytes > 0 && m_downloadedBytes.load() >= m_totalBytes) {
+                            m_chunks[0].completed = true;
+                        }
+                    }
+                }
+            },
+            info,
+            [this, &hTargetFile](const HttpHeadInfo& headInfo) -> HANDLE {
+                // Check HTML error / Cloudflare challenge page
+                std::wstring contentTypeLower = headInfo.contentType;
+                std::transform(contentTypeLower.begin(), contentTypeLower.end(), contentTypeLower.begin(), ::tolower);
+                bool isHtml = (contentTypeLower.find(L"text/html") != std::wstring::npos);
+                bool isBinary = IsBinaryArchiveFile(m_filename) || IsBinaryArchiveFile(m_savePath) || IsBinaryArchiveFile(m_originalUrl);
+
+                if (isHtml && isBinary && headInfo.contentLength < 10 * 1024 * 1024) {
+                    std::lock_guard<std::mutex> lk(m_metaMutex);
+                    m_errorMessage = L"웹페이지 또는 인간 확인(Cloudflare) 차단 페이지 감지 (더블클릭하여 브라우저에서 인증 필요)";
+                    return INVALID_HANDLE_VALUE;
+                }
+
+                {
+                    std::lock_guard<std::mutex> lk(m_metaMutex);
+                    if (!headInfo.finalUrl.empty()) {
+                        m_url = headInfo.finalUrl;
+                    }
+                    if (!headInfo.filename.empty() && (HttpEngine::IsGenericFilename(m_filename) || m_filename == L"download.bin")) {
+                        m_filename = headInfo.filename;
+                        WCHAR dir[MAX_PATH] = { 0 };
+                        wcscpy_s(dir, m_savePath.c_str());
+                        PathRemoveFileSpecW(dir);
+                        m_savePath = std::wstring(dir) + L"\\" + m_filename;
+                    }
+                }
+
+                if (headInfo.contentLength > 0) {
+                    m_totalBytes = headInfo.contentLength;
+                    std::lock_guard<std::mutex> lock(m_chunkMutex);
+                    if (!m_chunks.empty()) {
+                        m_chunks[0].endByte = m_totalBytes - 1;
+                    }
+                }
+
+                WCHAR dir[MAX_PATH] = { 0 };
+                wcscpy_s(dir, m_savePath.c_str());
+                PathRemoveFileSpecW(dir);
+                SHCreateDirectoryExW(NULL, dir, NULL);
+
+                hTargetFile = CreateFileW(
+                    m_savePath.c_str(),
+                    GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL,
+                    OPEN_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL,
+                    NULL
+                );
+
+                if (hTargetFile != INVALID_HANDLE_VALUE && m_totalBytes > 0) {
+                    DWORD dwBytesReturned = 0;
+                    DeviceIoControl(hTargetFile, FSCTL_SET_SPARSE, NULL, 0, NULL, 0, &dwBytesReturned, NULL);
+                    LARGE_INTEGER li;
+                    li.QuadPart = m_totalBytes;
+                    SetFilePointerEx(hTargetFile, li, NULL, FILE_BEGIN);
+                    SetEndOfFile(hTargetFile);
+                    li.QuadPart = m_downloadedBytes.load();
+                    SetFilePointerEx(hTargetFile, li, NULL, FILE_BEGIN);
+                }
+
+                if (m_onStatusChanged) m_onStatusChanged(this);
+                return hTargetFile;
+            }
+        );
+
+        if (hTargetFile != INVALID_HANDLE_VALUE) {
+            CloseHandle(hTargetFile);
+            hTargetFile = INVALID_HANDLE_VALUE;
+        }
+
+        m_activeWorkers = 0;
+        m_speedTracker.Reset();
+        m_currentSpeed = 0;
+
+        if (ok) {
+            m_status = TaskStatus::Completed;
+            {
+                std::lock_guard<std::mutex> lk(m_metaMutex);
+                m_completedAt = GetCurrentTimeString();
+            }
+            if (m_totalBytes <= 0) {
+                m_totalBytes = m_downloadedBytes.load();
+            }
+            {
+                std::lock_guard<std::mutex> lock(m_chunkMutex);
+                if (!m_chunks.empty()) {
+                    m_chunks[0].completed = true;
+                    m_chunks[0].downloadedBytes = m_downloadedBytes.load();
+                }
+            }
+            CleanResumeState();
+        } else {
+            if (m_abortFlag || m_pauseFlag) {
+                m_status = TaskStatus::Paused;
+                SaveResumeState();
+            } else {
+                m_status = TaskStatus::Error;
+                std::lock_guard<std::mutex> lk(m_metaMutex);
+                if (m_errorMessage.empty()) {
+                    if (info.statusCode == 403) {
+                        m_errorMessage = L"접근 거부(403 Forbidden) - 인간 확인(Cloudflare Turnstile) 또는 1회성 토큰 만료";
+                    } else if (info.statusCode > 0) {
+                        m_errorMessage = L"HTTP 오류 코드: " + std::to_wstring(info.statusCode);
+                    } else {
+                        m_errorMessage = L"서버에 연결할 수 없거나 전송이 중단되었습니다.";
+                    }
+                }
+            }
+        }
+
+        if (m_onStatusChanged) m_onStatusChanged(this);
+        return;
+    }
+
     HttpHeadInfo info;
-    bool queryOk = HttpEngine::QueryUrlInfo(m_url, m_referer, m_cookies, info);
+    bool queryOk = HttpEngine::QueryUrlInfo(m_url, m_referer, m_cookies, info, m_userAgent);
 
     // If query failed or returned 401/403/404/410, try dynamic re-resolution once in case direct URL expired (TTL)
     if (!queryOk || info.statusCode >= 400) {
@@ -748,7 +922,7 @@ void DownloadTask::WorkerLoop() {
                     std::lock_guard<std::mutex> lk(m_metaMutex);
                     m_url = retryLink.directUrl;
                 }
-                queryOk = HttpEngine::QueryUrlInfo(m_url, m_referer, m_cookies, info);
+                queryOk = HttpEngine::QueryUrlInfo(m_url, m_referer, m_cookies, info, m_userAgent);
             }
         }
     }

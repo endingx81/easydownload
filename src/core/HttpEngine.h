@@ -24,7 +24,8 @@ public:
         const std::wstring& url,
         const std::wstring& referer,
         const std::wstring& cookies,
-        HttpHeadInfo& outInfo
+        HttpHeadInfo& outInfo,
+        const std::wstring& userAgent = L""
     );
 
     static bool DownloadRange(
@@ -39,7 +40,21 @@ public:
         std::function<void(int64_t bytesRead)> progressCallback,
         std::mutex* pFileMutex = nullptr,
         const std::atomic<int64_t>* pDynamicEndByte = nullptr,
-        std::atomic<bool>* pServerLimitHit = nullptr
+        std::atomic<bool>* pServerLimitHit = nullptr,
+        const std::wstring& userAgent = L""
+    );
+
+    static bool DownloadDirectStream(
+        const std::wstring& url,
+        const std::wstring& referer,
+        const std::wstring& cookies,
+        const std::wstring& userAgent,
+        int64_t startByte,
+        std::atomic<bool>& abortFlag,
+        std::atomic<bool>& pauseFlag,
+        std::function<void(int64_t bytesRead)> progressCallback,
+        HttpHeadInfo& outInfo,
+        std::function<HANDLE(const HttpHeadInfo& info)> onHeadersReceived = nullptr
     );
 
     static bool DownloadBuffer(

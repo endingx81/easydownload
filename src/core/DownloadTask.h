@@ -149,7 +149,8 @@ public:
         const std::wstring& savePath,
         const std::wstring& referer = L"",
         const std::wstring& cookies = L"",
-        int numParts = 8
+        int numParts = 8,
+        const std::wstring& userAgent = L""
     );
     ~DownloadTask();
 
@@ -199,6 +200,14 @@ public:
     std::wstring GetCookies() const {
         std::lock_guard<std::mutex> lock(m_metaMutex);
         return m_cookies;
+    }
+    std::wstring GetUserAgent() const {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        return m_userAgent;
+    }
+    void SetUserAgent(const std::wstring& ua) {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        m_userAgent = ua;
     }
     std::wstring GetDependsOnId() const {
         std::lock_guard<std::mutex> lock(m_metaMutex);
@@ -258,6 +267,7 @@ private:
     std::wstring m_originalUrl;
     std::wstring m_referer;
     std::wstring m_cookies;
+    std::wstring m_userAgent;
     std::wstring m_savePath;
     std::wstring m_filename;
     std::wstring m_dependsOnId;

@@ -247,7 +247,8 @@ bool HttpEngine::QueryUrlInfo(
     const std::wstring& url,
     const std::wstring& referer,
     const std::wstring& cookies,
-    HttpHeadInfo& outInfo
+    HttpHeadInfo& outInfo,
+    const std::wstring& userAgent
 ) {
     outInfo.finalUrl = url;
     outInfo.statusCode = 0;
@@ -272,8 +273,9 @@ bool HttpEngine::QueryUrlInfo(
         path.append(urlComp.lpszExtraInfo, urlComp.dwExtraInfoLength);
     }
 
+    const WCHAR* ua = (!userAgent.empty()) ? userAgent.c_str() : DEFAULT_USER_AGENT;
     HINTERNET hSession = WinHttpOpen(
-        DEFAULT_USER_AGENT,
+        ua,
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS,
@@ -451,7 +453,8 @@ bool HttpEngine::DownloadRange(
     std::function<void(int64_t bytesRead)> progressCallback,
     std::mutex* pFileMutex,
     const std::atomic<int64_t>* pDynamicEndByte,
-    std::atomic<bool>* pServerLimitHit
+    std::atomic<bool>* pServerLimitHit,
+    const std::wstring& userAgent
 ) {
     URL_COMPONENTS urlComp = { 0 };
     urlComp.dwStructSize = sizeof(urlComp);
@@ -471,8 +474,9 @@ bool HttpEngine::DownloadRange(
         path.append(urlComp.lpszExtraInfo, urlComp.dwExtraInfoLength);
     }
 
+    const WCHAR* ua = (!userAgent.empty()) ? userAgent.c_str() : DEFAULT_USER_AGENT;
     HINTERNET hSession = WinHttpOpen(
-        DEFAULT_USER_AGENT,
+        ua,
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS,
@@ -530,6 +534,8 @@ bool HttpEngine::DownloadRange(
     std::wstring headers;
     if (startByte >= 0 && endByte >= startByte) {
         headers = L"Range: bytes=" + std::to_wstring(startByte) + L"-" + std::to_wstring(endByte) + L"\r\n";
+    } else if (startByte > 0) {
+        headers = L"Range: bytes=" + std::to_wstring(startByte) + L"-\r\n";
     }
     if (!cookies.empty()) {
         headers += L"Cookie: " + cookies + L"\r\n";
@@ -617,6 +623,264 @@ bool HttpEngine::DownloadRange(
                 }
             }
         }
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return success;
+}
+
+bool HttpEngine::DownloadDirectStream(
+    const std::wstring& url,
+    const std::wstring& referer,
+    const std::wstring& cookies,
+    const std::wstring& userAgent,
+    int64_t startByte,
+    std::atomic<bool>& abortFlag,
+    std::atomic<bool>& pauseFlag,
+    std::function<void(int64_t bytesRead)> progressCallback,
+    HttpHeadInfo& outInfo,
+    std::function<HANDLE(const HttpHeadInfo& info)> onHeadersReceived
+) {
+    outInfo.finalUrl = url;
+    outInfo.statusCode = 0;
+    outInfo.contentLength = -1;
+    outInfo.acceptRanges = false;
+
+    URL_COMPONENTS urlComp = { 0 };
+    urlComp.dwStructSize = sizeof(urlComp);
+    urlComp.dwHostNameLength = (DWORD)-1;
+    urlComp.dwUrlPathLength = (DWORD)-1;
+    urlComp.dwExtraInfoLength = (DWORD)-1;
+
+    if (!WinHttpCrackUrl(url.c_str(), (DWORD)url.length(), 0, &urlComp)) {
+        return false;
+    }
+
+    std::wstring host(urlComp.lpszHostName, urlComp.dwHostNameLength);
+    std::wstring path = (urlComp.lpszUrlPath && urlComp.dwUrlPathLength > 0)
+        ? std::wstring(urlComp.lpszUrlPath, urlComp.dwUrlPathLength)
+        : L"/";
+    if (urlComp.lpszExtraInfo && urlComp.dwExtraInfoLength > 0) {
+        path.append(urlComp.lpszExtraInfo, urlComp.dwExtraInfoLength);
+    }
+
+    const WCHAR* ua = (!userAgent.empty()) ? userAgent.c_str() : DEFAULT_USER_AGENT;
+    HINTERNET hSession = WinHttpOpen(
+        ua,
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS,
+        0
+    );
+    if (!hSession) return false;
+    WinHttpSetTimeouts(hSession, 10000, 15000, 15000, 60000);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), urlComp.nPort, 0);
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+
+    std::wstring effectiveReferer = referer;
+    if (effectiveReferer.empty()) {
+        if (url.find(L"surrit.com") != std::wstring::npos) {
+            effectiveReferer = L"https://missav123.com/";
+        }
+    }
+
+    DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(
+        hConnect,
+        L"GET",
+        path.c_str(),
+        NULL,
+        WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES,
+        flags
+    );
+
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+
+    // Enable HTTP/2 protocol flag
+    DWORD protocols = WINHTTP_PROTOCOL_FLAG_HTTP2;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &protocols, sizeof(protocols));
+
+    // Ignore SSL certificate errors if needed
+    if (flags & WINHTTP_FLAG_SECURE) {
+        DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+                         SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+                         SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+                         SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+        WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
+    }
+
+    // Enable automatic redirect following across domains/protocols
+    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
+
+    // Disable auto-decompression so Content-Length matches raw binary byte count
+    DWORD autoDecomp = WINHTTP_DECOMPRESSION_FLAG_GZIP | WINHTTP_DECOMPRESSION_FLAG_DEFLATE;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_DECOMPRESSION, &autoDecomp, sizeof(autoDecomp));
+
+    std::wstring headers;
+    if (startByte > 0) {
+        headers = L"Range: bytes=" + std::to_wstring(startByte) + L"-\r\n";
+    }
+    if (!cookies.empty()) {
+        headers += L"Cookie: " + cookies + L"\r\n";
+    }
+    if (!effectiveReferer.empty()) {
+        headers += L"Referer: " + effectiveReferer + L"\r\n";
+    }
+    headers += L"Accept: */*\r\n";
+    headers += L"Connection: keep-alive\r\n";
+
+    BOOL bSend = WinHttpSendRequest(
+        hRequest,
+        headers.c_str(),
+        (DWORD)headers.length(),
+        NULL,
+        0,
+        0,
+        0
+    );
+
+    if (!bSend || !WinHttpReceiveResponse(hRequest, NULL)) {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD dwSize = sizeof(statusCode);
+    WinHttpQueryHeaders(
+        hRequest,
+        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+        WINHTTP_HEADER_NAME_BY_INDEX,
+        &statusCode,
+        &dwSize,
+        WINHTTP_NO_HEADER_INDEX
+    );
+    outInfo.statusCode = (int)statusCode;
+
+    // Content-Length
+    WCHAR lenBuf[64] = { 0 };
+    DWORD lenSize = sizeof(lenBuf);
+    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX, lenBuf, &lenSize, WINHTTP_NO_HEADER_INDEX)) {
+        outInfo.contentLength = _wtoi64(lenBuf);
+    }
+
+    // Content-Range if Partial Content
+    if (statusCode == 206) {
+        WCHAR rangeBuf[128] = { 0 };
+        DWORD rSize = sizeof(rangeBuf);
+        if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CUSTOM, L"Content-Range", rangeBuf, &rSize, WINHTTP_NO_HEADER_INDEX)) {
+            std::wstring cr = rangeBuf;
+            size_t slash = cr.find(L'/');
+            if (slash != std::wstring::npos && slash + 1 < cr.length()) {
+                std::wstring totalStr = cr.substr(slash + 1);
+                if (totalStr != L"*") {
+                    outInfo.contentLength = _wtoi64(totalStr.c_str());
+                }
+            }
+        }
+    }
+
+    // Accept-Ranges
+    WCHAR rangeSupBuf[32] = { 0 };
+    DWORD rsSize = sizeof(rangeSupBuf);
+    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_ACCEPT_RANGES, WINHTTP_HEADER_NAME_BY_INDEX, rangeSupBuf, &rsSize, WINHTTP_NO_HEADER_INDEX)) {
+        outInfo.acceptRanges = (_wcsicmp(rangeSupBuf, L"bytes") == 0);
+    }
+    if (statusCode == 206) {
+        outInfo.acceptRanges = true;
+    }
+
+    // Content-Type
+    WCHAR typeBuf[256] = { 0 };
+    DWORD typeSize = sizeof(typeBuf);
+    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CONTENT_TYPE, WINHTTP_HEADER_NAME_BY_INDEX, typeBuf, &typeSize, WINHTTP_NO_HEADER_INDEX)) {
+        outInfo.contentType = typeBuf;
+    }
+
+    // Content-Disposition
+    WCHAR dispBuf[512] = { 0 };
+    DWORD dispSize = sizeof(dispBuf);
+    if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CONTENT_DISPOSITION, WINHTTP_HEADER_NAME_BY_INDEX, dispBuf, &dispSize, WINHTTP_NO_HEADER_INDEX)) {
+        outInfo.filename = ExtractFilenameFromContentDisposition(dispBuf);
+    }
+    if (outInfo.filename.empty()) {
+        outInfo.filename = ExtractFilenameFromUrl(url);
+    }
+
+    // Final URL
+    WCHAR finalUrlBuf[2048] = { 0 };
+    DWORD finalUrlSize = sizeof(finalUrlBuf);
+    if (WinHttpQueryOption(hRequest, WINHTTP_OPTION_URL, finalUrlBuf, &finalUrlSize)) {
+        outInfo.finalUrl = finalUrlBuf;
+    } else {
+        outInfo.finalUrl = url;
+    }
+
+    if (statusCode >= 400) {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+
+    HANDLE hTargetFile = INVALID_HANDLE_VALUE;
+    if (onHeadersReceived) {
+        hTargetFile = onHeadersReceived(outInfo);
+    }
+    if (hTargetFile == INVALID_HANDLE_VALUE) {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+
+    // Stream directly into file
+    bool success = false;
+    std::vector<char> buffer(64 * 1024);
+    int64_t currentFileOffset = startByte > 0 ? startByte : 0;
+
+    while (!abortFlag && !pauseFlag) {
+        DWORD bytesRead = 0;
+        if (!WinHttpReadData(hRequest, buffer.data(), (DWORD)buffer.size(), &bytesRead)) {
+            break;
+        }
+        if (bytesRead == 0) {
+            // EOF reached cleanly
+            success = true;
+            break;
+        }
+
+        OVERLAPPED ov = { 0 };
+        ov.Offset = (DWORD)(currentFileOffset & 0xFFFFFFFF);
+        ov.OffsetHigh = (DWORD)((currentFileOffset >> 32) & 0xFFFFFFFF);
+
+        DWORD bytesWritten = 0;
+        if (!WriteFile(hTargetFile, buffer.data(), bytesRead, &bytesWritten, &ov)) {
+            success = false;
+            break;
+        }
+
+        currentFileOffset += bytesRead;
+        if (progressCallback) {
+            progressCallback(bytesRead);
+        }
+    }
+
+    if (outInfo.contentLength > 0 && currentFileOffset >= outInfo.contentLength) {
+        success = true;
     }
 
     WinHttpCloseHandle(hRequest);

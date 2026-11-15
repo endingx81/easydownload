@@ -667,6 +667,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
           filename: "",
           referer: tab ? tab.url : "",
           cookies: cookiesStr,
+          userAgent: navigator.userAgent,
           isVideo: info.mediaType === "video"
         })
       });
@@ -821,6 +822,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         filename: msg.filename || "",
         referer: msg.referer || (sender && sender.tab ? sender.tab.url : ""),
         cookies: msg.cookies || "",
+        userAgent: navigator.userAgent,
         isVideo: !!msg.isVideo
       })
     }).then(res => res.json()).then(data => {

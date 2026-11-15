@@ -16,6 +16,7 @@ struct DownloadRequest {
     std::wstring filename;
     std::wstring referer;
     std::wstring cookies;
+    std::wstring userAgent;
     bool isVideo{ false };
 };
 

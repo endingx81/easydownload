@@ -831,3 +831,24 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
      - `AllowSetForegroundWindow(ASFW_ANY)` + `SetWindowPos(HWND_TOPMOST -> HWND_NOTOPMOST)` + `BringWindowToTop` + `SetForegroundWindow`의 안전한 비차단 표준 조합만 사용하여 0ms 안전 활성화를 보장할 것.
   4. **`LVN_ITEMCHANGED` 실제 선택 변경 필터링**:
      - `(pnmv->uChanged & LVIF_STATE) && (pnmv->uNewState & LVIS_SELECTED)`일 때만 반응하도록 엄격히 가드를 쳐 불필요한 이벤트 폭주를 방어할 것.
+
+---
+
+### ⚡ 1회성 토큰 CDN(MegaUp, 1Fichier) 및 단일 연결 호스트의 사전 탐색(Probe) 소진 방지 및 Zero-Probe 직결 스트리밍 원칙
+- **실제 실수 및 문제**:
+  1. **사전 Probe(`Range: bytes=0-0`)로 인한 1회성 토큰 즉시 소진(Burnout)**:
+     - MegaUp, 1Fichier(무료 티어) 등 엄격한 파일 호스팅 사이트는 직링크 발급 시 '1회용 다운로드 토큰' 또는 '동시 접속 1개 제한' 정책을 가짐.
+     - 다운로더가 실제 전송 전 파일 크기와 Range 지원 여부를 확인하기 위해 관례적으로 보낸 사전 탐색 요청(`QueryUrlInfo` 내 `Range: bytes=0-0`)을 서버가 첫 다운로드로 인식하여 토큰을 즉시 소각하거나 연결을 닫아버림.
+     - 탐색 소켓이 닫힌 뒤 실제 다운로드를 위해 `DownloadRange`로 재연결하는 순간 서버는 이미 소진된 토큰으로 판정하여 `403 Forbidden`, `410 Gone`, `416 Range Not Satisfiable` 또는 `15분 쿨다운(Wait 15 minutes)`을 반환하여 다운로드가 0%에서 실패함.
+  2. **크롬 브라우저 User-Agent 불일치로 인한 Cloudflare 403 차단**:
+     - 크롬 확장에서 Cloudflare Turnstile을 통과한 뒤 직링크를 넘겨주었으나, C++ 다운로더가 크롬의 실제 `User-Agent`를 상속받지 않고 하드코딩된 구버전 User-Agent(`Chrome/130...`)로 요청하여 Cloudflare 핑거프린트 불일치로 즉시 403 차단됨.
+  3. **이미 완성된 직링크를 `LinkExtractor`로 재추출하여 파괴**:
+     - 크롬 확장에서 이미 정상 파싱/인계된 최종 CDN 직링크(`download.megaup.net`, `a-XX.1fichier.com`)를 작업 루프(`WorkerLoop`)에서 중간 공유 URL로 오인하여 `LinkExtractor::ResolveLink`를 다시 실행해버려, 쿠키도 없는 상태에서 오류 HTML 페이지로 직링크를 덮어써버림.
+- **방지 원칙 (Zero-Probe Direct Streaming 파이프라인)**:
+  1. **사전 Probe 완전 배제 (단 1번의 직결로 헤더 확인 및 데이터 스트리밍 동시 완결)**:
+     - `IsSingleConnectionHost` 또는 분할 수 1개인 작업에 대해서는 사전 탐색 요청(`QueryUrlInfo`)을 일절 보내지 말 것.
+     - 곧바로 `DownloadDirectStream`을 호출하여 단 1개의 HTTP GET 연결을 수립하고, 응답 헤더(`200 OK` 또는 `206 Partial Content`) 수신 즉시 인라인 콜백(`onHeadersReceived`)에서 `Content-Length`, `Content-Disposition`, `Content-Type`을 검증한 뒤 해당 소켓을 끊지 않고 그대로 본체 파일 데이터 스트리밍(`WinHttpReadData` -> `WriteFile`)으로 직결 완결할 것.
+  2. **브라우저 User-Agent 및 세션 쿠키 100% 무결 상속**:
+     - 크롬 확장 프로그램(`background.js`)에서 인계 시 `navigator.userAgent`를 페이로드에 필수 동봉하고, `LocalServer` -> `DownloadRequest` -> `DownloadManager::AddTask` -> `DownloadTask` -> `HttpEngine`으로 온전히 전달하여 WinHTTP 세션 생성(`WinHttpOpen`) 시 해당 User-Agent를 정확하게 적용할 것.
+  3. **직링크 보호 가드 (Already-Direct Guard)**:
+     - 이미 `userAgent`와 `cookies`가 구비되어 인계되었거나, 도메인/경로에 CDN 직링크 특성(`download.megaup.net`, `1fichier.com/c`, `a-XX.1fichier.com`)이 있는 경우 `LinkExtractor::ResolveLink`의 재추출 대상에서 무조건 제외하여 유효한 직링크가 파괴되는 결함을 원천 방지할 것.

@@ -48,7 +48,8 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
     int parts,
     bool startImmediately,
     bool isHls,
-    const std::wstring& dependsOnId
+    const std::wstring& dependsOnId,
+    const std::wstring& userAgent
 ) {
     if (url.empty()) return nullptr;
 
@@ -115,7 +116,7 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
     // Automatically ensure filename uniqueness: filename (1).ext, (2).ext, etc.
     actualPath = GenerateUniqueSavePath(actualPath);
 
-    auto task = std::make_shared<DownloadTask>(url, actualPath, referer, cookies, actualParts);
+    auto task = std::make_shared<DownloadTask>(url, actualPath, referer, cookies, actualParts, userAgent);
     if (!dependsOnId.empty()) {
         task->SetDependsOnId(dependsOnId);
     }

@@ -21,7 +21,8 @@ public:
         int parts = 0,
         bool startImmediately = true,
         bool isHls = false,
-        const std::wstring& dependsOnId = L""
+        const std::wstring& dependsOnId = L"",
+        const std::wstring& userAgent = L""
     );
 
     bool StartTask(const std::wstring& id);
