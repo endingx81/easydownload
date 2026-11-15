@@ -26,6 +26,7 @@
 #define ID_TASK_SHOW_INFO               1015
 #define ID_DPI_BYPASS_TOGGLE            1016
 #define ID_CHROME_DOH_TOGGLE            1017
+#define ID_TASK_BATCH_EXTRACT           1018
 
 // Dialogs
 #define IDD_NEW_DOWNLOAD                2001
@@ -134,3 +135,17 @@
 #define IDC_LBL_INFO_PARTS              3409
 #define IDC_BTN_INFO_OPEN_FILE          3410
 #define IDC_BTN_INFO_OPEN_FOLDER        3411
+
+// Main Window Tabs & Batch Extractor Controls
+#define IDC_MAIN_TAB                    3501
+#define IDC_EDT_BATCH_INPUT             3502
+#define IDC_LBL_BATCH_GUIDE             3503
+#define IDC_LBL_BATCH_HOST              3504
+#define IDC_CMB_BATCH_HOST              3505
+#define IDC_CHK_BATCH_SEQUENTIAL        3506
+#define IDC_BTN_BATCH_ANALYZE           3507
+#define IDC_LST_BATCH_RESULTS           3508
+#define IDC_BTN_BATCH_ADD_SELECTED      3509
+#define IDC_BTN_BATCH_ADD_ALL           3510
+#define IDC_BTN_BATCH_CLEAR             3511
+#define IDC_LBL_BATCH_STATUS            3512

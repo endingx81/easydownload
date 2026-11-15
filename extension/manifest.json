@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "EasyDownload",
-  "version": "1.4.7",
+  "version": "1.5.0",
   "description": "Chrome의 모든 다운로드를 EasyDownload 가속기로 자동 연결하고 웹 상의 모든 비디오/M3U8 스트림을 실시간 감지하여 고속 다운로드합니다.",
   "icons": {
     "16": "icons/icon16.png",

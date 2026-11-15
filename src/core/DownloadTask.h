@@ -49,24 +49,84 @@ public:
     void Pause();
     void Resume();
     void Cancel();
+    void WaitForExit();
 
     std::wstring GetId() const { return m_id; }
-    std::wstring GetUrl() const { return m_url; }
-    std::wstring GetOriginalUrl() const { return !m_originalUrl.empty() ? m_originalUrl : m_url; }
-    std::wstring GetSavePath() const { return m_savePath; }
-    std::wstring GetFilename() const { return m_filename; }
-    int64_t GetTotalBytes() const { return m_totalBytes; }
+    std::wstring GetUrl() const {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        return m_url;
+    }
+    void SetUrl(const std::wstring& url) {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        m_url = url;
+    }
+    std::wstring GetOriginalUrl() const {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        return !m_originalUrl.empty() ? m_originalUrl : m_url;
+    }
+    std::wstring GetSavePath() const {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        return m_savePath;
+    }
+    void SetSavePath(const std::wstring& path) {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        m_savePath = path;
+    }
+    std::wstring GetFilename() const {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        return m_filename;
+    }
+    void SetFilename(const std::wstring& name) {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        m_filename = name;
+    }
+    std::wstring GetReferer() const {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        return m_referer;
+    }
+    void SetReferer(const std::wstring& ref) {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        m_referer = ref;
+    }
+    std::wstring GetCookies() const {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        return m_cookies;
+    }
+    std::wstring GetDependsOnId() const {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        return m_dependsOnId;
+    }
+    void SetDependsOnId(const std::wstring& depId) {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        m_dependsOnId = depId;
+    }
+
+    int64_t GetTotalBytes() const { return m_totalBytes.load(); }
+    void SetTotalBytes(int64_t total) { m_totalBytes.store(total); }
     int64_t GetDownloadedBytes() const { return m_downloadedBytes.load(); }
     int64_t GetCurrentSpeed() const { return m_currentSpeed.load(); }
     int64_t GetRemainingSeconds() const;
     int GetNumParts() const;
     int GetActiveWorkersCount() const { return m_activeWorkers.load(); }
     void SetActiveWorkersCount(int count) { m_activeWorkers.store(count); }
-    TaskStatus GetStatus() const { return m_status; }
+    TaskStatus GetStatus() const { return m_status.load(); }
     std::wstring GetStatusString() const;
-    std::wstring GetErrorMessage() const { return m_errorMessage; }
-    std::wstring GetCreatedAt() const { return m_createdAt; }
-    std::wstring GetCompletedAt() const { return m_completedAt; }
+    std::wstring GetErrorMessage() const {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        return m_errorMessage;
+    }
+    void SetErrorMessage(const std::wstring& msg) {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        m_errorMessage = msg;
+    }
+    std::wstring GetCreatedAt() const {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        return m_createdAt;
+    }
+    std::wstring GetCompletedAt() const {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        return m_completedAt;
+    }
     bool IsHls() const { return m_isHls; }
     void SetIsHls(bool hls) { m_isHls = hls; }
     bool IsYouTube() const { return m_isYouTube; }
@@ -92,8 +152,11 @@ private:
     std::wstring m_cookies;
     std::wstring m_savePath;
     std::wstring m_filename;
+    std::wstring m_dependsOnId;
+    mutable std::mutex m_metaMutex;
+
     int m_numParts{ 8 };
-    int64_t m_totalBytes{ -1 };
+    std::atomic<int64_t> m_totalBytes{ -1 };
     std::atomic<int64_t> m_downloadedBytes{ 0 };
     std::atomic<int64_t> m_currentSpeed{ 0 };
     std::atomic<bool> m_abortFlag{ false };
@@ -102,7 +165,7 @@ private:
     bool m_isHls{ false };
     bool m_isYouTube{ false };
 
-    TaskStatus m_status{ TaskStatus::Queued };
+    std::atomic<TaskStatus> m_status{ TaskStatus::Queued };
     std::wstring m_errorMessage;
     std::wstring m_createdAt;
     std::wstring m_completedAt;

@@ -15,7 +15,17 @@
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
 
+static LONG WINAPI ApplicationCrashHandler(EXCEPTION_POINTERS* pExceptionPointers) {
+    WCHAR msg[256];
+    swprintf_s(msg, L"EasyDownload 오류 감지 (코드: 0x%08X). 프로세스를 안전하게 종료합니다.",
+        pExceptionPointers->ExceptionRecord ? pExceptionPointers->ExceptionRecord->ExceptionCode : 0);
+    OutputDebugStringW(msg);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
+    SetUnhandledExceptionFilter(ApplicationCrashHandler);
+
     // 0. Ensure application directory is searched for DLLs (e.g. WinDivert.dll)
     WCHAR exeDir[MAX_PATH] = { 0 };
     GetModuleFileNameW(NULL, exeDir, MAX_PATH);

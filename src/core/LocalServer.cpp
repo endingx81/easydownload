@@ -218,7 +218,7 @@ void LocalServer::HandleClient(SOCKET clientSock) {
         } else if (line.find("GET /ping") != std::string::npos || line.find("GET /status") != std::string::npos) {
             bool dpiRunning = DpiBypassManager::Instance().IsRunning();
             int dpiMode = Settings::Instance().GetDpiBypassMode();
-            std::string json = "{\"status\":\"ok\",\"app\":\"EasyDownload\",\"version\":\"1.4.7\",\"dpi_running\":" +
+            std::string json = "{\"status\":\"ok\",\"app\":\"EasyDownload\",\"version\":\"1.5.0\",\"dpi_running\":" +
                                std::string(dpiRunning ? "true" : "false") +
                                ",\"dpi_mode\":" + std::to_string(dpiMode) +
                                ",\"doh_configured\":" + std::string(DpiBypassManager::IsChromeDohConfigured() ? "true" : "false") + "}";

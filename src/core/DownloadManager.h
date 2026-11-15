@@ -20,7 +20,8 @@ public:
         const std::wstring& cookies = L"",
         int parts = 0,
         bool startImmediately = true,
-        bool isHls = false
+        bool isHls = false,
+        const std::wstring& dependsOnId = L""
     );
 
     bool StartTask(const std::wstring& id);

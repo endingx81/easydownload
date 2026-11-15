@@ -5,7 +5,9 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <atomic>
 #include "../core/DownloadTask.h"
+#include "../core/LinkExtractor.h"
 
 namespace EasyDownload {
 
@@ -49,13 +51,42 @@ private:
     void UpdateDpiBypassUi();
     void OnToggleChromeDoh();
 
+    // Batch Extractor Handlers
+    void InitBatchControls();
+    void SwitchTab(int tabIndex);
+    void RelayoutBatch(int width, int topY, int bottomY);
+    void OnBatchAnalyze();
+    void OnBatchAdd(bool onlySelected);
+    void OnBatchClear();
+    void UpdateBatchListItem(int index);
+
     HWND m_hWnd{ NULL };
     HWND m_hToolbar{ NULL };
+    HWND m_hTabCtrl{ NULL };
     HWND m_hListView{ NULL };
     HWND m_hSegmentBar{ NULL };
     HWND m_hStatusBar{ NULL };
+
+    // Batch Controls
+    HWND m_hBatchGuideLbl{ NULL };
+    HWND m_hBatchTextEdit{ NULL };
+    HWND m_hBatchHostLbl{ NULL };
+    HWND m_hBatchHostCombo{ NULL };
+    HWND m_hBatchSeqCheck{ NULL };
+    HWND m_hBatchBtnAnalyze{ NULL };
+    HWND m_hBatchListView{ NULL };
+    HWND m_hBatchBtnAddSelected{ NULL };
+    HWND m_hBatchBtnAddAll{ NULL };
+    HWND m_hBatchBtnClear{ NULL };
+    HWND m_hBatchStatusLbl{ NULL };
+
     HFONT m_hFont{ NULL };
     HFONT m_hBoldFont{ NULL };
+
+    int m_currentTab{ 0 }; // 0: Downloads, 1: Batch Extractor
+    std::vector<ExtractedLink> m_batchLinks;
+    std::atomic<bool> m_batchAbortFlag{ false };
+    bool m_batchAnalyzing{ false };
 
     UINT m_dpi{ 96 };
     NOTIFYICONDATAW m_nid{};

@@ -721,3 +721,41 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
   2. **재시작 복원 작업의 디스크 캐시(`.hls_parts`) 자동 연동(`SetLoadedState`)**:
      - 재시작 후 복원된 작업에 대해 저장 경로에 `.hls_parts` 캐시 디렉터리가 존재하는지 검사하고, 이미 받아둔 세그먼트 파일들의 바이트 합계를 즉시 산출하여 `m_downloadedBytes`에 반영할 것.
      - 상태를 `TaskStatus::Paused(중단됨)`로 설정하여 사용자가 메인 창에서 더블클릭하거나 "시작/재시작" 버튼을 누르면 즉시 이전 진행 지점부터 이어받도록 완벽히 복원할 것.
+
+---
+
+### 🛑 다운로드 작업 삭제 시 UI 스레드 동기 대기(`m_mainThread.join()`)로 인한 UI 프리징 방지 원칙 (0ms 무지연 백그라운드 삭제)
+- **실제 실수 및 문제**:
+  - 사용자가 다운로드 진행 중인 작업을 리스트에서 삭제할 때, `MainWindow::OnDeleteSelected()`(UI 메인 스레드) ➡️ `DownloadManager::DeleteTask()` ➡️ `target->Cancel()` ➡️ `m_mainThread.join()` ➡️ `for (auto& t : m_workerThreads) t.join();`이 동기식으로 호출됨.
+  - 최대 12개의 워커 스레드가 WinHTTP 네트워크 소켓 함수(`WinHttpReceiveResponse`, `WinHttpReadData`) 내부에서 타임아웃(15~60초)이나 응답 대기 중인 상태에서 UI 스레드가 `join()`으로 묶여버림.
+  - 이로 인해 프로그램 창 전체가 수 초간 먹통(응답 없음, 윈도우 버벅임)이 되며 삭제 반응이 극도로 지연되는 치명적 UX 결함 발생.
+- **방지 원칙 (0ms 비동기 분리 소멸 파이프라인)**:
+  1. **UI 및 작업 목록 즉시 분리**: `DeleteTask(id)` 호출 즉시 작업 목록(`m_tasks`)에서 해당 작업을 분리(`erase`)하고, 변경 이벤트를 발생시켜 UI 리스트뷰에서 0ms 만에 해당 행이 즉각 사라지도록 처리할 것.
+  2. **백그라운드 스레드 위임(`std::thread(...).detach()`)**: 실제 작업 중단 플래그 설정(`target->Cancel()`), 소켓 및 스레드 종료 대기(`target->WaitForExit()`), 물리 디스크 파일 삭제는 UI 스레드가 아닌 **독립 백그라운드 스레드로 넘겨 뒤에서 조용히 정리**되도록 전면 비동기화할 것.
+
+---
+
+### 🔒 멀티스레드 환경에서 UI 주기 갱신(`WM_TIMER`)과 워커 스레드 간 문자열 재할당 경합으로 인한 간헐적 크래시(`0xC0000005 Access Violation`) 방지 원칙
+- **실제 실수 및 문제**:
+  - UI 메인 스레드는 `WM_TIMER`에 의해 250ms마다 모든 작업의 `t->GetFilename()`, `t->GetUrl()`을 호출하여 리스트뷰를 갱신함.
+  - 동시에 백그라운드 워커 스레드는 리디렉션이나 스트림 추출 완료 시 `m_filename = realTitle + L".mp4"`, `m_url = finalUrl`과 같이 문자열을 수정함.
+  - `std::wstring`은 문자열 길이가 늘어날 때 내부 힙 버퍼를 재할당(Free 후 New)하는데, UI 스레드가 이전 버퍼 포인터를 읽는 순간 메모리가 해제되면서 **`0xC0000005 (Access Violation)` 메모리 참조 위반으로 프로세스가 간헐적으로 의문사**하는 현상 발생.
+- **방지 원칙**:
+  1. `DownloadTask`의 모든 문자열(`m_url`, `m_filename`, `m_savePath`, `m_errorMessage`, `m_completedAt`, `m_dependsOnId` 등) 접근은 전용 메타데이터 뮤텍스(`m_metaMutex`)를 통해 상호 배제(Lock) 보호하고 복사본을 반환할 것.
+  2. `m_status`와 `m_totalBytes`는 `std::atomic<TaskStatus>`, `std::atomic<int64_t>`로 선언하여 스레드 간 동시 읽기/쓰기 시 원자성을 100% 보장할 것.
+  3. `main.cpp` 최상단에 `SetUnhandledExceptionFilter`를 등록하여 예기치 못한 비정상 종료를 보호 모드로 안전하게 방어할 것.
+
+---
+
+### 🔗 대량 본문 텍스트 일괄 링크 자동 추출 및 순차 다운로드 큐잉(`m_dependsOnId`) 패턴
+- **요구사항**: 사용자가 웹페이지나 커뮤니티에서 복사한 마크다운/일반 텍스트(예: `Send:[Part.1](URL)... 1Fichier:[Part.1]...`)를 붙여넣으면, 경유 페이지(nswvault)의 숨겨진 직링크를 자동 파싱하고 최적 호스트(Send.now)의 CDN 고속 직링크를 획득하여 순차적으로 다운로드하도록 지원.
+- **핵심 패턴**:
+  1. **네이티브 C++ 텍스트 파서 (`LinkExtractor::ParseRawText`)**:
+     - 마크다운 링크 `[Part.X](URL) (Size)` 및 평문 URL 정규식 추출
+     - 호스트 블록 구분자(`Send:`, `1Fichier:`, `Megaup:`) 위치를 자동 분석하여 각 링크에 호스트 태그 자동 매핑
+  2. **경유 페이지 및 호스트 직링크 자동 해석 (`LinkExtractor::ResolveLink`)**:
+     - `nswvault.com/.../download/X` 접속 시 7초 카운트다운을 스킵하고 HTML 소스 내 `<a id="dl-link" href="...">`를 즉시 추출
+     - `send.now` (Sendcm) 호스트 감지 시 `op=download2` 폼을 백그라운드 자동 POST하여 `302 Found` `Location` 헤더로부터 6.0 GB 초고속 CDN 직링크(`https://d8815.datatransfer.to/...`) 획득
+  3. **순차 다운로드 의존성 큐잉 (`m_dependsOnId`)**:
+     - 대용량 분할 파일들을 동시 다운로드할 경우 호스트의 IP당 동시접속 제한(IP Throttling)에 걸리는 문제를 방지하기 위해, Part 1만 기동하고 Part 2~5는 이전 파트에 대한 의존성 ID(`SetDependsOnId(prevId)`)를 부여하여 대기열(`Queued`)에 등록.
+     - `DownloadManager::CheckQueue()`에서 이전 파트가 `Completed` 상태가 되는 즉시 다음 파트를 자동으로 연속 기동하여 사용자 개입 없이 전 파트가 순차 다운로드 완료되도록 보장.

@@ -47,7 +47,8 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
     const std::wstring& cookies,
     int parts,
     bool startImmediately,
-    bool isHls
+    bool isHls,
+    const std::wstring& dependsOnId
 ) {
     if (url.empty()) return nullptr;
 
@@ -112,6 +113,9 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
     actualPath = GenerateUniqueSavePath(actualPath);
 
     auto task = std::make_shared<DownloadTask>(url, actualPath, referer, cookies, actualParts);
+    if (!dependsOnId.empty()) {
+        task->SetDependsOnId(dependsOnId);
+    }
     if (isHlsResolved) {
         task->SetIsHls(true);
     }
@@ -126,7 +130,14 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
     }
 
     if (startImmediately) {
-        task->Start();
+        if (!dependsOnId.empty()) {
+            auto dep = GetTask(dependsOnId);
+            if (!dep || dep->GetStatus() == TaskStatus::Completed) {
+                task->Start();
+            }
+        } else {
+            task->Start();
+        }
     }
 
     SaveTasks();
@@ -175,14 +186,21 @@ bool DownloadManager::DeleteTask(const std::wstring& id, bool deleteFileOnDisk) 
     }
 
     if (target) {
-        target->Cancel();
-        if (deleteFileOnDisk) {
-            DeleteFileW(target->GetSavePath().c_str());
-            std::wstring partFile = target->GetSavePath() + L".egpart";
-            DeleteFileW(partFile.c_str());
-        }
         SaveTasks();
         if (m_onTasksUpdated) m_onTasksUpdated();
+
+        // Perform cancellation, thread wait, and file deletion asynchronously in a detached background thread!
+        // The UI thread returns in 0ms without ANY freeze!
+        std::thread([target, deleteFileOnDisk]() {
+            target->Cancel();
+            target->WaitForExit();
+            if (deleteFileOnDisk) {
+                DeleteFileW(target->GetSavePath().c_str());
+                std::wstring partFile = target->GetSavePath() + L".egpart";
+                DeleteFileW(partFile.c_str());
+            }
+        }).detach();
+
         return true;
     }
     return false;
@@ -221,6 +239,16 @@ void DownloadManager::CheckQueue() {
 
     for (auto& qTask : queued) {
         if (activeCount >= maxTasks) break;
+
+        // Sequential download support: wait until dependent task completes
+        std::wstring depId = qTask->GetDependsOnId();
+        if (!depId.empty()) {
+            auto dep = GetTask(depId);
+            if (dep && dep->GetStatus() != TaskStatus::Completed) {
+                continue; // Wait until dep task finishes!
+            }
+        }
+
         qTask->Start();
         activeCount++;
     }

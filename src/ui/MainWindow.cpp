@@ -154,6 +154,7 @@ void MainWindow::InitControls() {
     TBBUTTON buttons[] = {
         { I_IMAGENONE, ID_TASK_NEW, TBSTATE_ENABLED, BTNS_BUTTON | BTNS_AUTOSIZE, {0}, 0, (INT_PTR)L"➕ 새 다운로드" },
         { I_IMAGENONE, ID_TASK_NEW_VIDEO, TBSTATE_ENABLED, BTNS_BUTTON | BTNS_AUTOSIZE, {0}, 0, (INT_PTR)L"🎬 비디오 다운로드" },
+        { I_IMAGENONE, ID_TASK_BATCH_EXTRACT, TBSTATE_ENABLED, BTNS_BUTTON | BTNS_AUTOSIZE, {0}, 0, (INT_PTR)L"🔗 일괄 링크 추출" },
         { 0, 0, 0, BTNS_SEP, {0}, 0, 0 },
         { I_IMAGENONE, ID_TASK_START, TBSTATE_ENABLED, BTNS_BUTTON | BTNS_AUTOSIZE, {0}, 0, (INT_PTR)L"▶ 시작 / 재시작" },
         { I_IMAGENONE, ID_TASK_PAUSE, TBSTATE_ENABLED, BTNS_BUTTON | BTNS_AUTOSIZE, {0}, 0, (INT_PTR)L"⏸ 중단" },
@@ -166,6 +167,22 @@ void MainWindow::InitControls() {
     };
     SendMessage(m_hToolbar, TB_ADDBUTTONS, _countof(buttons), (LPARAM)buttons);
     SendMessage(m_hToolbar, TB_AUTOSIZE, 0, 0);
+
+    // Create Main Tab Control
+    m_hTabCtrl = CreateWindowExW(
+        0, WC_TABCONTROLW, L"",
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+        0, 0, 0, 0,
+        m_hWnd, (HMENU)IDC_MAIN_TAB, hInst, NULL
+    );
+    SendMessage(m_hTabCtrl, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    TCITEMW tie = { 0 };
+    tie.mask = TCIF_TEXT;
+    tie.pszText = (LPWSTR)L"📥 다운로드 목록";
+    TabCtrl_InsertItem(m_hTabCtrl, 0, &tie);
+    tie.pszText = (LPWSTR)L"🔗 일괄 링크 추출기";
+    TabCtrl_InsertItem(m_hTabCtrl, 1, &tie);
 
     // Create ListView (Multi-select enabled: LVS_SINGLESEL removed)
     m_hListView = CreateWindowExW(
@@ -214,10 +231,152 @@ void MainWindow::InitControls() {
 
     int parts[] = { 260, 440, 680, -1 };
     SendMessage(m_hStatusBar, SB_SETPARTS, 4, (LPARAM)parts);
+
+    InitBatchControls();
+}
+
+void MainWindow::InitBatchControls() {
+    HINSTANCE hInst = GetModuleHandle(NULL);
+
+    m_hBatchGuideLbl = CreateWindowExW(
+        0, L"STATIC", L"다운로드 링크가 포함된 본문 텍스트(마크다운, 웹페이지 복사 내용 등)를 아래에 붙여넣으세요:",
+        WS_CHILD | SS_LEFTNOWORDWRAP,
+        0, 0, 0, 0, m_hWnd, (HMENU)IDC_LBL_BATCH_GUIDE, hInst, NULL
+    );
+    SendMessage(m_hBatchGuideLbl, WM_SETFONT, (WPARAM)m_hBoldFont, TRUE);
+
+    m_hBatchTextEdit = CreateWindowExW(
+        WS_EX_CLIENTEDGE, L"EDIT", L"",
+        WS_CHILD | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
+        0, 0, 0, 0, m_hWnd, (HMENU)IDC_EDT_BATCH_INPUT, hInst, NULL
+    );
+    SendMessage(m_hBatchTextEdit, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    m_hBatchHostLbl = CreateWindowExW(
+        0, L"STATIC", L"호스트 우선순위:",
+        WS_CHILD | SS_LEFTNOWORDWRAP,
+        0, 0, 0, 0, m_hWnd, (HMENU)IDC_LBL_BATCH_HOST, hInst, NULL
+    );
+    SendMessage(m_hBatchHostLbl, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    m_hBatchHostCombo = CreateWindowExW(
+        0, L"COMBOBOX", L"",
+        WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL,
+        0, 0, 0, 0, m_hWnd, (HMENU)IDC_CMB_BATCH_HOST, hInst, NULL
+    );
+    SendMessage(m_hBatchHostCombo, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+    SendMessageW(m_hBatchHostCombo, CB_ADDSTRING, 0, (LPARAM)L"모든 호스트 (All)");
+    SendMessageW(m_hBatchHostCombo, CB_ADDSTRING, 0, (LPARAM)L"Send.now 우선");
+    SendMessageW(m_hBatchHostCombo, CB_ADDSTRING, 0, (LPARAM)L"1Fichier 우선");
+    SendMessageW(m_hBatchHostCombo, CB_ADDSTRING, 0, (LPARAM)L"Megaup 우선");
+    SendMessageW(m_hBatchHostCombo, CB_SETCURSEL, 0, 0);
+
+    m_hBatchSeqCheck = CreateWindowExW(
+        0, L"BUTTON", L"순차 다운로드 (1개 완료 시 다음 파트 자동 시작 - 호스트 차단 방지)",
+        WS_CHILD | BS_AUTOCHECKBOX,
+        0, 0, 0, 0, m_hWnd, (HMENU)IDC_CHK_BATCH_SEQUENTIAL, hInst, NULL
+    );
+    SendMessage(m_hBatchSeqCheck, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+    SendMessage(m_hBatchSeqCheck, BM_SETCHECK, BST_CHECKED, 0);
+
+    m_hBatchBtnAnalyze = CreateWindowExW(
+        0, L"BUTTON", L"🔍 링크 분석 및 최종 주소 추출",
+        WS_CHILD | BS_PUSHBUTTON,
+        0, 0, 0, 0, m_hWnd, (HMENU)IDC_BTN_BATCH_ANALYZE, hInst, NULL
+    );
+    SendMessage(m_hBatchBtnAnalyze, WM_SETFONT, (WPARAM)m_hBoldFont, TRUE);
+
+    m_hBatchListView = CreateWindowExW(
+        0, WC_LISTVIEWW, L"",
+        WS_CHILD | LVS_REPORT | LVS_SHOWSELALWAYS | WS_BORDER,
+        0, 0, 0, 0, m_hWnd, (HMENU)IDC_LST_BATCH_RESULTS, hInst, NULL
+    );
+    ListView_SetExtendedListViewStyle(m_hBatchListView, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER | LVS_EX_CHECKBOXES);
+    SendMessage(m_hBatchListView, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    struct BatchColDef { const WCHAR* name; int width; };
+    BatchColDef batchCols[] = {
+        { L"파트 / 라벨", 150 },
+        { L"호스트", 90 },
+        { L"용량", 80 },
+        { L"상태", 180 },
+        { L"파일명", 240 },
+        { L"최종 직링크", 280 },
+        { L"원본 URL", 240 },
+    };
+
+    for (int i = 0; i < _countof(batchCols); ++i) {
+        LVCOLUMNW lvc = { 0 };
+        lvc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+        lvc.pszText = (LPWSTR)batchCols[i].name;
+        lvc.cx = MulDiv(batchCols[i].width, m_dpi, 96);
+        lvc.iSubItem = i;
+        ListView_InsertColumn(m_hBatchListView, i, &lvc);
+    }
+
+    m_hBatchBtnAddAll = CreateWindowExW(
+        0, L"BUTTON", L"⬇️ 전체 항목 다운로드 추가 (순차 시작)",
+        WS_CHILD | BS_PUSHBUTTON,
+        0, 0, 0, 0, m_hWnd, (HMENU)IDC_BTN_BATCH_ADD_ALL, hInst, NULL
+    );
+    SendMessage(m_hBatchBtnAddAll, WM_SETFONT, (WPARAM)m_hBoldFont, TRUE);
+
+    m_hBatchBtnAddSelected = CreateWindowExW(
+        0, L"BUTTON", L"⬇️ 선택 항목만 추가",
+        WS_CHILD | BS_PUSHBUTTON,
+        0, 0, 0, 0, m_hWnd, (HMENU)IDC_BTN_BATCH_ADD_SELECTED, hInst, NULL
+    );
+    SendMessage(m_hBatchBtnAddSelected, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    m_hBatchBtnClear = CreateWindowExW(
+        0, L"BUTTON", L"🧹 초기화",
+        WS_CHILD | BS_PUSHBUTTON,
+        0, 0, 0, 0, m_hWnd, (HMENU)IDC_BTN_BATCH_CLEAR, hInst, NULL
+    );
+    SendMessage(m_hBatchBtnClear, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+
+    m_hBatchStatusLbl = CreateWindowExW(
+        0, L"STATIC", L"준비 완료: 텍스트를 붙여넣고 [🔍 링크 분석 및 최종 주소 추출] 버튼을 누르세요.",
+        WS_CHILD | SS_LEFTNOWORDWRAP,
+        0, 0, 0, 0, m_hWnd, (HMENU)IDC_LBL_BATCH_STATUS, hInst, NULL
+    );
+    SendMessage(m_hBatchStatusLbl, WM_SETFONT, (WPARAM)m_hFont, TRUE);
+}
+
+void MainWindow::SwitchTab(int tabIndex) {
+    m_currentTab = tabIndex;
+    TabCtrl_SetCurSel(m_hTabCtrl, tabIndex);
+
+    int showDownloads = (tabIndex == 0) ? SW_SHOW : SW_HIDE;
+    int showBatch = (tabIndex == 1) ? SW_SHOW : SW_HIDE;
+
+    ShowWindow(m_hListView, showDownloads);
+    ShowWindow(m_hSegmentBar, showDownloads);
+
+    ShowWindow(m_hBatchGuideLbl, showBatch);
+    ShowWindow(m_hBatchTextEdit, showBatch);
+    ShowWindow(m_hBatchHostLbl, showBatch);
+    ShowWindow(m_hBatchHostCombo, showBatch);
+    ShowWindow(m_hBatchSeqCheck, showBatch);
+    ShowWindow(m_hBatchBtnAnalyze, showBatch);
+    ShowWindow(m_hBatchListView, showBatch);
+    ShowWindow(m_hBatchBtnAddSelected, showBatch);
+    ShowWindow(m_hBatchBtnAddAll, showBatch);
+    ShowWindow(m_hBatchBtnClear, showBatch);
+    ShowWindow(m_hBatchStatusLbl, showBatch);
+
+    RECT rc;
+    GetClientRect(m_hWnd, &rc);
+    Relayout(rc.right - rc.left, rc.bottom - rc.top);
+    InvalidateRect(m_hWnd, NULL, TRUE);
+
+    if (tabIndex == 0) {
+        RefreshTasksList();
+    }
 }
 
 void MainWindow::Relayout(int width, int height) {
-    if (!m_hToolbar || !m_hListView || !m_hSegmentBar || !m_hStatusBar) return;
+    if (!m_hToolbar || !m_hTabCtrl || !m_hListView || !m_hSegmentBar || !m_hStatusBar) return;
 
     SendMessage(m_hToolbar, TB_AUTOSIZE, 0, 0);
     RECT tbRect = { 0 };
@@ -229,12 +388,74 @@ void MainWindow::Relayout(int width, int height) {
     GetWindowRect(m_hStatusBar, &sbRect);
     int sbHeight = sbRect.bottom - sbRect.top;
 
-    int segHeight = MulDiv(32, m_dpi, 96);
-    int segY = height - sbHeight - segHeight;
-    SetWindowPos(m_hSegmentBar, NULL, 0, segY, width, segHeight, SWP_NOZORDER);
+    int tabHeight = MulDiv(28, m_dpi, 96);
+    SetWindowPos(m_hTabCtrl, NULL, 0, tbHeight, width, tabHeight, SWP_NOZORDER);
 
-    int lvHeight = segY - tbHeight;
-    SetWindowPos(m_hListView, NULL, 0, tbHeight, width, lvHeight > 0 ? lvHeight : 0, SWP_NOZORDER);
+    int contentTop = tbHeight + tabHeight;
+    int contentBottom = height - sbHeight;
+
+    if (m_currentTab == 0) {
+        int segHeight = MulDiv(32, m_dpi, 96);
+        int segY = contentBottom - segHeight;
+        SetWindowPos(m_hSegmentBar, NULL, 0, segY, width, segHeight, SWP_NOZORDER);
+
+        int lvHeight = segY - contentTop;
+        SetWindowPos(m_hListView, NULL, 0, contentTop, width, lvHeight > 0 ? lvHeight : 0, SWP_NOZORDER);
+    } else {
+        RelayoutBatch(width, contentTop, contentBottom);
+    }
+}
+
+void MainWindow::RelayoutBatch(int width, int topY, int bottomY) {
+    int pad = MulDiv(8, m_dpi, 96);
+    int rowH = MulDiv(22, m_dpi, 96);
+    int editH = MulDiv(110, m_dpi, 96);
+    int btnH = MulDiv(28, m_dpi, 96);
+
+    int y = topY + pad;
+    int contentW = width - pad * 2;
+
+    // 1. Guide Label
+    SetWindowPos(m_hBatchGuideLbl, NULL, pad, y, contentW, rowH, SWP_NOZORDER);
+    y += rowH;
+
+    // 2. Multiline Text Edit
+    SetWindowPos(m_hBatchTextEdit, NULL, pad, y, contentW, editH, SWP_NOZORDER);
+    y += editH + pad;
+
+    // 3. Options Bar: Host Label + Combo + Sequential Checkbox + Analyze Button
+    int hostLblW = MulDiv(90, m_dpi, 96);
+    int comboW = MulDiv(140, m_dpi, 96);
+    int checkW = MulDiv(380, m_dpi, 96);
+    int analyzeBtnW = MulDiv(210, m_dpi, 96);
+
+    SetWindowPos(m_hBatchHostLbl, NULL, pad, y + 3, hostLblW, rowH, SWP_NOZORDER);
+    SetWindowPos(m_hBatchHostCombo, NULL, pad + hostLblW, y, comboW, rowH * 8, SWP_NOZORDER);
+
+    SetWindowPos(m_hBatchSeqCheck, NULL, pad + hostLblW + comboW + pad, y + 2, checkW, rowH, SWP_NOZORDER);
+
+    int btnX = width - pad - analyzeBtnW;
+    SetWindowPos(m_hBatchBtnAnalyze, NULL, btnX > 0 ? btnX : pad, y - 2, analyzeBtnW, btnH, SWP_NOZORDER);
+    y += btnH + pad;
+
+    // 4. Action buttons at bottom
+    int bottomBtnY = bottomY - pad - btnH;
+    int btnAddAllW = MulDiv(260, m_dpi, 96);
+    int btnAddSelW = MulDiv(150, m_dpi, 96);
+    int btnClearW = MulDiv(80, m_dpi, 96);
+
+    SetWindowPos(m_hBatchBtnAddAll, NULL, pad, bottomBtnY, btnAddAllW, btnH, SWP_NOZORDER);
+    SetWindowPos(m_hBatchBtnAddSelected, NULL, pad + btnAddAllW + pad, bottomBtnY, btnAddSelW, btnH, SWP_NOZORDER);
+    SetWindowPos(m_hBatchBtnClear, NULL, pad + btnAddAllW + pad + btnAddSelW + pad, bottomBtnY, btnClearW, btnH, SWP_NOZORDER);
+
+    // Status label at right of bottom buttons
+    int statusLblX = pad + btnAddAllW + pad + btnAddSelW + pad + btnClearW + pad;
+    int statusLblW = width - pad - statusLblX;
+    SetWindowPos(m_hBatchStatusLbl, NULL, statusLblX, bottomBtnY + 5, statusLblW > 0 ? statusLblW : 0, rowH, SWP_NOZORDER);
+
+    // 5. Results ListView in the remaining middle space
+    int listH = bottomBtnY - pad - y;
+    SetWindowPos(m_hBatchListView, NULL, pad, y, contentW, listH > 0 ? listH : 0, SWP_NOZORDER);
 }
 
 void MainWindow::RefreshTasksList() {
@@ -590,6 +811,152 @@ void MainWindow::OnToggleChromeDoh() {
     }
 }
 
+void MainWindow::OnBatchAnalyze() {
+    if (m_batchAnalyzing) {
+        m_batchAbortFlag = true;
+        SetWindowTextW(m_hBatchBtnAnalyze, L"중단 요청 중...");
+        EnableWindow(m_hBatchBtnAnalyze, FALSE);
+        return;
+    }
+
+    int len = GetWindowTextLengthW(m_hBatchTextEdit);
+    if (len <= 0) {
+        MessageBoxW(m_hWnd, L"분석할 텍스트를 먼저 입력창에 붙여넣으세요.", L"안내", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    std::wstring rawText(len + 1, 0);
+    GetWindowTextW(m_hBatchTextEdit, &rawText[0], len + 1);
+    rawText.resize(len);
+
+    int hostSel = (int)SendMessageW(m_hBatchHostCombo, CB_GETCURSEL, 0, 0);
+    std::wstring hostFilter;
+    if (hostSel == 1) hostFilter = L"Send.now";
+    else if (hostSel == 2) hostFilter = L"1Fichier";
+    else if (hostSel == 3) hostFilter = L"Megaup";
+
+    m_batchLinks = LinkExtractor::ParseRawText(rawText, hostFilter);
+    if (m_batchLinks.empty()) {
+        MessageBoxW(m_hWnd, L"입력한 텍스트에서 인식 가능한 다운로드 링크를 찾지 못했습니다.", L"안내", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    ListView_DeleteAllItems(m_hBatchListView);
+    for (int i = 0; i < (int)m_batchLinks.size(); ++i) {
+        const auto& link = m_batchLinks[i];
+        LVITEMW lvi = { 0 };
+        lvi.mask = LVIF_TEXT;
+        lvi.iItem = i;
+        lvi.pszText = (LPWSTR)link.label.c_str();
+        ListView_InsertItem(m_hBatchListView, &lvi);
+
+        ListView_SetCheckState(m_hBatchListView, i, TRUE);
+        UpdateBatchListItem(i);
+    }
+
+    m_batchAnalyzing = true;
+    m_batchAbortFlag = false;
+    SetWindowTextW(m_hBatchBtnAnalyze, L"⏹ 분석 중단");
+    SetWindowTextW(m_hBatchStatusLbl, (L"총 " + std::to_wstring(m_batchLinks.size()) + L" 개 링크 분석 및 직링크 추출 시작...").c_str());
+
+    std::thread([this]() {
+        int resolvedCount = 0;
+        int failedCount = 0;
+
+        for (size_t i = 0; i < m_batchLinks.size(); ++i) {
+            if (m_batchAbortFlag.load()) break;
+
+            m_batchLinks[i].status = LinkStatus::Resolving;
+            m_batchLinks[i].statusMessage = L"분석 중...";
+            PostMessageW(m_hWnd, WM_APP + 10, (WPARAM)i, 0);
+
+            bool ok = LinkExtractor::ResolveLink(m_batchLinks[i], m_batchAbortFlag);
+            if (ok) resolvedCount++;
+            else failedCount++;
+
+            PostMessageW(m_hWnd, WM_APP + 10, (WPARAM)i, 0);
+        }
+
+        m_batchAnalyzing = false;
+        PostMessageW(m_hWnd, WM_APP + 11, (WPARAM)resolvedCount, (LPARAM)failedCount);
+    }).detach();
+}
+
+void MainWindow::UpdateBatchListItem(int index) {
+    if (index < 0 || index >= (int)m_batchLinks.size()) return;
+    const auto& link = m_batchLinks[index];
+
+    ListView_SetItemText(m_hBatchListView, index, 0, (LPWSTR)link.label.c_str());
+    ListView_SetItemText(m_hBatchListView, index, 1, (LPWSTR)link.hostName.c_str());
+    ListView_SetItemText(m_hBatchListView, index, 2, (LPWSTR)link.sizeStr.c_str());
+    ListView_SetItemText(m_hBatchListView, index, 3, (LPWSTR)link.statusMessage.c_str());
+    ListView_SetItemText(m_hBatchListView, index, 4, (LPWSTR)link.filename.c_str());
+    ListView_SetItemText(m_hBatchListView, index, 5, (LPWSTR)link.directUrl.c_str());
+    ListView_SetItemText(m_hBatchListView, index, 6, (LPWSTR)link.originalUrl.c_str());
+}
+
+void MainWindow::OnBatchAdd(bool onlySelected) {
+    if (m_batchLinks.empty()) {
+        MessageBoxW(m_hWnd, L"추가할 링크가 없습니다. 먼저 분석을 진행하세요.", L"안내", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    bool isSequential = (SendMessage(m_hBatchSeqCheck, BM_GETCHECK, 0, 0) == BST_CHECKED);
+
+    std::wstring prevTaskId = L"";
+    int addedCount = 0;
+
+    for (int i = 0; i < (int)m_batchLinks.size(); ++i) {
+        if (onlySelected && !ListView_GetCheckState(m_hBatchListView, i)) {
+            continue;
+        }
+
+        const auto& link = m_batchLinks[i];
+        std::wstring downloadUrl = !link.directUrl.empty() ? link.directUrl : link.originalUrl;
+        if (downloadUrl.empty()) continue;
+
+        bool startNow = (!isSequential || prevTaskId.empty());
+        std::wstring dependsOn = isSequential ? prevTaskId : L"";
+
+        auto task = DownloadManager::Instance().AddTask(
+            downloadUrl,
+            L"",
+            link.originalUrl,
+            L"",
+            0,
+            startNow,
+            false,
+            dependsOn
+        );
+
+        if (task) {
+            if (!link.filename.empty()) {
+                task->SetFilename(link.filename);
+            }
+            prevTaskId = task->GetId();
+            addedCount++;
+        }
+    }
+
+    if (addedCount > 0) {
+        std::wstring msg = L"총 " + std::to_wstring(addedCount) + L" 개 항목이 다운로드 목록에 추가되었습니다.";
+        if (isSequential) {
+            msg += L"\n\n(순차 다운로드 적용: 이전 파트가 완료되면 다음 파트가 자동으로 시작됩니다.)";
+        }
+        MessageBoxW(m_hWnd, msg.c_str(), L"다운로드 목록 추가 완료", MB_OK | MB_ICONINFORMATION);
+        SwitchTab(0);
+    } else {
+        MessageBoxW(m_hWnd, L"추가할 선택된 항목이 없습니다.", L"안내", MB_OK | MB_ICONWARNING);
+    }
+}
+
+void MainWindow::OnBatchClear() {
+    SetWindowTextW(m_hBatchTextEdit, L"");
+    m_batchLinks.clear();
+    ListView_DeleteAllItems(m_hBatchListView);
+    SetWindowTextW(m_hBatchStatusLbl, L"초기화되었습니다.");
+}
+
 LRESULT CALLBACK MainWindow::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     MainWindow* pThis = nullptr;
     if (uMsg == WM_CREATE) {
@@ -639,6 +1006,11 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         switch (id) {
         case ID_TASK_NEW: OnNewDownload(); break;
         case ID_TASK_NEW_VIDEO: OnNewVideoDownload(); break;
+        case ID_TASK_BATCH_EXTRACT: SwitchTab(1); break;
+        case IDC_BTN_BATCH_ANALYZE: OnBatchAnalyze(); break;
+        case IDC_BTN_BATCH_ADD_SELECTED: OnBatchAdd(true); break;
+        case IDC_BTN_BATCH_ADD_ALL: OnBatchAdd(false); break;
+        case IDC_BTN_BATCH_CLEAR: OnBatchClear(); break;
         case ID_TASK_START: OnStartSelected(); break;
         case ID_TASK_PAUSE: OnPauseSelected(); break;
         case ID_TASK_DELETE: OnDeleteSelected(); break;
@@ -667,6 +1039,11 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     }
     case WM_NOTIFY: {
         auto nm = (NMHDR*)lParam;
+        if (nm->hwndFrom == m_hTabCtrl && nm->code == TCN_SELCHANGE) {
+            int sel = TabCtrl_GetCurSel(m_hTabCtrl);
+            SwitchTab(sel);
+            return 0;
+        }
         if (nm->idFrom == 200) { // ListView
             if (nm->code == LVN_ITEMCHANGED) {
                 UpdateSegmentBar();
@@ -721,6 +1098,29 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             }
         }
         break;
+    }
+    case WM_APP + 10: { // Update single batch list item
+        int idx = (int)wParam;
+        UpdateBatchListItem(idx);
+        return 0;
+    }
+    case WM_APP + 11: { // Batch resolution finished
+        int resolved = (int)wParam;
+        int failed = (int)lParam;
+        SetWindowTextW(m_hBatchBtnAnalyze, L"🔍 링크 분석 및 최종 주소 추출");
+        EnableWindow(m_hBatchBtnAnalyze, TRUE);
+        std::wstring status = L"분석 완료: 총 " + std::to_wstring(m_batchLinks.size()) + L" 개 중 " +
+            std::to_wstring(resolved) + L" 개 추출 성공";
+        if (failed > 0) {
+            status += L", " + std::to_wstring(failed) + L" 개 실패";
+        }
+        SetWindowTextW(m_hBatchStatusLbl, status.c_str());
+        return 0;
+    }
+    case WM_CTLCOLORSTATIC: {
+        HDC hdc = (HDC)wParam;
+        SetBkMode(hdc, TRANSPARENT);
+        return (INT_PTR)GetSysColorBrush(COLOR_BTNFACE);
     }
     case WM_EXT_DOWNLOAD: {
         auto req = (DownloadRequest*)wParam;

@@ -141,6 +141,9 @@ void DownloadTask::Cancel() {
     m_currentSpeed = 0;
     SaveResumeState();
     if (m_onStatusChanged) m_onStatusChanged(this);
+}
+
+void DownloadTask::WaitForExit() {
     if (m_mainThread.joinable() && std::this_thread::get_id() != m_mainThread.get_id()) {
         m_mainThread.join();
     }
@@ -361,6 +364,7 @@ void DownloadTask::WorkerLoop() {
         // 1. Fetch real video title with yt-dlp if available
         std::wstring realTitle = HlsDownloader::GetVideoTitleWithYtDlp(m_url);
         if (!realTitle.empty()) {
+            std::lock_guard<std::mutex> lk(m_metaMutex);
             m_filename = realTitle + L".mp4";
             WCHAR dir[MAX_PATH] = { 0 };
             wcscpy_s(dir, m_savePath.c_str());
@@ -444,7 +448,10 @@ void DownloadTask::WorkerLoop() {
             localtime_s(&timeinfo, &in_time_t);
             WCHAR timeBuf[64] = { 0 };
             wcsftime(timeBuf, 64, L"%Y-%m-%d %H:%M:%S", &timeinfo);
-            m_completedAt = timeBuf;
+            {
+                std::lock_guard<std::mutex> lk(m_metaMutex);
+                m_completedAt = timeBuf;
+            }
 
             WIN32_FILE_ATTRIBUTE_DATA fad = { 0 };
             if (GetFileAttributesExW(m_savePath.c_str(), GetFileExInfoStandard, &fad)) {
@@ -468,6 +475,7 @@ void DownloadTask::WorkerLoop() {
         } else {
             if (!m_abortFlag && !m_pauseFlag) {
                 m_status = TaskStatus::Error;
+                std::lock_guard<std::mutex> lk(m_metaMutex);
                 m_errorMessage = L"YouTube 다운로드 실패 (yt-dlp 실행 오류 또는 차단)";
             } else {
                 m_status = TaskStatus::Paused;
@@ -488,20 +496,26 @@ void DownloadTask::WorkerLoop() {
         std::wstring realTitle;
         std::wstring realReferer;
         if (SextbExtractor::ExtractStream(m_url, realStreamUrl, realTitle, realReferer, m_abortFlag)) {
-            m_url = realStreamUrl;
-            m_referer = realReferer;
-            m_isHls = true;
-            if (!realTitle.empty()) {
-                m_filename = realTitle + L".mp4";
-                WCHAR dir[MAX_PATH] = { 0 };
-                wcscpy_s(dir, m_savePath.c_str());
-                PathRemoveFileSpecW(dir);
-                m_savePath = std::wstring(dir) + L"\\" + m_filename;
-                if (m_onStatusChanged) m_onStatusChanged(this);
+            {
+                std::lock_guard<std::mutex> lk(m_metaMutex);
+                m_url = realStreamUrl;
+                m_referer = realReferer;
+                if (!realTitle.empty()) {
+                    m_filename = realTitle + L".mp4";
+                    WCHAR dir[MAX_PATH] = { 0 };
+                    wcscpy_s(dir, m_savePath.c_str());
+                    PathRemoveFileSpecW(dir);
+                    m_savePath = std::wstring(dir) + L"\\" + m_filename;
+                }
             }
+            m_isHls = true;
+            if (m_onStatusChanged) m_onStatusChanged(this);
         } else {
             m_status = TaskStatus::Error;
-            m_errorMessage = L"sextb.net 동영상 스트림 추출 실패";
+            {
+                std::lock_guard<std::mutex> lk(m_metaMutex);
+                m_errorMessage = L"sextb.net 동영상 스트림 추출 실패";
+            }
             if (m_onStatusChanged) m_onStatusChanged(this);
             return;
         }
@@ -517,20 +531,26 @@ void DownloadTask::WorkerLoop() {
         std::wstring realTitle;
         std::wstring realReferer;
         if (Av01Extractor::ExtractStream(testUrl, realStreamUrl, realTitle, realReferer, m_abortFlag)) {
-            m_url = realStreamUrl;
-            m_referer = realReferer;
-            m_isHls = true;
-            if (!realTitle.empty() && m_filename.empty()) {
-                m_filename = realTitle + L".mp4";
-                WCHAR dir[MAX_PATH] = { 0 };
-                wcscpy_s(dir, m_savePath.c_str());
-                PathRemoveFileSpecW(dir);
-                m_savePath = std::wstring(dir) + L"\\" + m_filename;
-                if (m_onStatusChanged) m_onStatusChanged(this);
+            {
+                std::lock_guard<std::mutex> lk(m_metaMutex);
+                m_url = realStreamUrl;
+                m_referer = realReferer;
+                if (!realTitle.empty() && m_filename.empty()) {
+                    m_filename = realTitle + L".mp4";
+                    WCHAR dir[MAX_PATH] = { 0 };
+                    wcscpy_s(dir, m_savePath.c_str());
+                    PathRemoveFileSpecW(dir);
+                    m_savePath = std::wstring(dir) + L"\\" + m_filename;
+                }
             }
+            m_isHls = true;
+            if (m_onStatusChanged) m_onStatusChanged(this);
         } else {
             m_status = TaskStatus::Error;
-            m_errorMessage = L"av01.media 동영상 스트림 추출 실패";
+            {
+                std::lock_guard<std::mutex> lk(m_metaMutex);
+                m_errorMessage = L"av01.media 동영상 스트림 추출 실패";
+            }
             if (m_onStatusChanged) m_onStatusChanged(this);
             return;
         }
@@ -635,12 +655,15 @@ void DownloadTask::WorkerLoop() {
         if (ok) {
             m_status = TaskStatus::Completed;
             m_currentSpeed = 0;
-            m_completedAt = GetCurrentTimeString();
-            m_totalBytes = m_downloadedBytes.load();
-            if (m_savePath.length() >= 5 && _wcsicmp(m_savePath.c_str() + m_savePath.length() - 5, L".m3u8") == 0) {
-                m_savePath = m_savePath.substr(0, m_savePath.length() - 5) + L".mp4";
-                m_filename = HttpEngine::ExtractFilenameFromUrl(m_savePath);
+            {
+                std::lock_guard<std::mutex> lk(m_metaMutex);
+                m_completedAt = GetCurrentTimeString();
+                if (m_savePath.length() >= 5 && _wcsicmp(m_savePath.c_str() + m_savePath.length() - 5, L".m3u8") == 0) {
+                    m_savePath = m_savePath.substr(0, m_savePath.length() - 5) + L".mp4";
+                    m_filename = HttpEngine::ExtractFilenameFromUrl(m_savePath);
+                }
             }
+            m_totalBytes = m_downloadedBytes.load();
             {
                 std::lock_guard<std::mutex> lock(m_chunkMutex);
                 for (auto& cp : m_chunks) {
@@ -651,6 +674,7 @@ void DownloadTask::WorkerLoop() {
         } else {
             if (!m_abortFlag && !m_pauseFlag) {
                 m_status = TaskStatus::Error;
+                std::lock_guard<std::mutex> lk(m_metaMutex);
                 m_errorMessage = L"HLS 스트림 다운로드 실패 (세그먼트 수신 차단 또는 재생 목록 오류)";
             } else {
                 m_status = TaskStatus::Paused;
@@ -665,31 +689,40 @@ void DownloadTask::WorkerLoop() {
     HttpHeadInfo info;
     if (!HttpEngine::QueryUrlInfo(m_url, m_referer, m_cookies, info)) {
         m_status = TaskStatus::Error;
-        m_errorMessage = L"서버에 연결할 수 없거나 잘못된 URL입니다.";
+        {
+            std::lock_guard<std::mutex> lk(m_metaMutex);
+            m_errorMessage = L"서버에 연결할 수 없거나 잘못된 URL입니다.";
+        }
         if (m_onStatusChanged) m_onStatusChanged(this);
         return;
     }
 
     if (info.statusCode >= 400) {
         m_status = TaskStatus::Error;
-        m_errorMessage = L"HTTP 오류 코드: " + std::to_wstring(info.statusCode);
+        {
+            std::lock_guard<std::mutex> lk(m_metaMutex);
+            m_errorMessage = L"HTTP 오류 코드: " + std::to_wstring(info.statusCode);
+        }
         if (m_onStatusChanged) m_onStatusChanged(this);
         return;
     }
 
-    if (!info.finalUrl.empty()) {
-        m_url = info.finalUrl;
+    {
+        std::lock_guard<std::mutex> lk(m_metaMutex);
+        if (!info.finalUrl.empty()) {
+            m_url = info.finalUrl;
+        }
+
+        if (!info.filename.empty() && (HttpEngine::IsGenericFilename(m_filename) || m_filename == L"download.bin")) {
+            m_filename = info.filename;
+            WCHAR dir[MAX_PATH] = { 0 };
+            wcscpy_s(dir, m_savePath.c_str());
+            PathRemoveFileSpecW(dir);
+            m_savePath = std::wstring(dir) + L"\\" + m_filename;
+        }
     }
 
     m_totalBytes = info.contentLength;
-
-    if (!info.filename.empty() && (HttpEngine::IsGenericFilename(m_filename) || m_filename == L"download.bin")) {
-        m_filename = info.filename;
-        WCHAR dir[MAX_PATH] = { 0 };
-        wcscpy_s(dir, m_savePath.c_str());
-        PathRemoveFileSpecW(dir);
-        m_savePath = std::wstring(dir) + L"\\" + m_filename;
-    }
 
     WCHAR dir[MAX_PATH] = { 0 };
     wcscpy_s(dir, m_savePath.c_str());
@@ -1029,7 +1062,10 @@ void DownloadTask::WorkerLoop() {
 
     if (allDone || (m_totalBytes > 0 && m_downloadedBytes.load() >= m_totalBytes)) {
         m_status = TaskStatus::Completed;
-        m_completedAt = GetCurrentTimeString();
+        {
+            std::lock_guard<std::mutex> lk(m_metaMutex);
+            m_completedAt = GetCurrentTimeString();
+        }
         CleanResumeState();
         if (m_totalBytes <= 0) {
             m_totalBytes = m_downloadedBytes.load();
@@ -1048,7 +1084,10 @@ void DownloadTask::WorkerLoop() {
         }
     } else {
         m_status = TaskStatus::Error;
-        m_errorMessage = L"일부 세그먼트 다운로드가 중단되었습니다. 재개하여 계속할 수 있습니다.";
+        {
+            std::lock_guard<std::mutex> lk(m_metaMutex);
+            m_errorMessage = L"일부 세그먼트 다운로드가 중단되었습니다. 재개하여 계속할 수 있습니다.";
+        }
         SaveResumeState();
     }
 

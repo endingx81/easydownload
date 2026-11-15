@@ -14,6 +14,7 @@ BEGIN
     BEGIN
         MENUITEM "새 다운로드(&N)...\tCtrl+N",         ID_TASK_NEW
         MENUITEM "비디오 다운로드(&V)...\tCtrl+V",     ID_TASK_NEW_VIDEO
+        MENUITEM "일괄 링크 추출(&B)...\tCtrl+B",       ID_TASK_BATCH_EXTRACT
         MENUITEM SEPARATOR
         MENUITEM "종료(&X)",                         ID_APP_EXIT
     END
@@ -242,8 +243,8 @@ END
 
 // Version Information
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,4,7,0
-PRODUCTVERSION  1,4,7,0
+FILEVERSION     1,5,0,0
+PRODUCTVERSION  1,5,0,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -256,12 +257,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "ai-open.kr"
             VALUE "FileDescription", "EasyDownload"
-            VALUE "FileVersion", "1.4.7.0"
+            VALUE "FileVersion", "1.5.0.0"
             VALUE "InternalName", "easydownload.exe"
             VALUE "LegalCopyright", "Copyright (C) 2026 ai-open.kr. All rights reserved."
             VALUE "OriginalFilename", "easydownload.exe"
             VALUE "ProductName", "EasyDownload"
-            VALUE "ProductVersion", "1.4.7.0"
+            VALUE "ProductVersion", "1.5.0.0"
         END
     END
     BLOCK "VarFileInfo"
