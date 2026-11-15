@@ -68,6 +68,7 @@ public:
     static std::wstring SanitizeFilename(const std::wstring& rawName, size_t maxLen = 0);
     static bool IsGenericFilename(const std::wstring& name);
     static std::wstring ExtractTitleFromRefererUrl(const std::wstring& refererUrl);
+    static bool IsSingleConnectionHost(const std::wstring& url, const std::wstring& originalUrl = L"");
 };
 
 } // namespace EasyDownload

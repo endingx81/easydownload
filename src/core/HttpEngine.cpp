@@ -905,4 +905,24 @@ bool HttpEngine::PostBuffer(
     return success;
 }
 
+bool HttpEngine::IsSingleConnectionHost(const std::wstring& url, const std::wstring& originalUrl) {
+    auto match = [](const std::wstring& u) -> bool {
+        if (u.empty()) return false;
+        std::wstring lower = u;
+        for (auto& ch : lower) {
+            ch = towlower(ch);
+        }
+        if (lower.find(L"send.now") != std::wstring::npos) return true;
+        if (lower.find(L"send.cm") != std::wstring::npos) return true;
+        if (lower.find(L"datatransfer.to") != std::wstring::npos) return true;
+        if (lower.find(L"1fichier.com") != std::wstring::npos) return true;
+        if (lower.find(L"megaup.net") != std::wstring::npos) return true;
+        if (lower.find(L"nswvault.com") != std::wstring::npos) return true;
+        if (lower.find(L"gofile.io") != std::wstring::npos) return true;
+        if (lower.find(L"pixeldrain.com") != std::wstring::npos) return true;
+        return false;
+    };
+    return match(url) || match(originalUrl);
+}
+
 } // namespace EasyDownload

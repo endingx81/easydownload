@@ -766,9 +766,13 @@ void DownloadTask::WorkerLoop() {
         m_rangeQueue.clear();
     }
 
+    std::wstring checkUrl = GetUrl();
+    std::wstring checkOrigUrl = GetOriginalUrl();
+    bool isSingleHost = HttpEngine::IsSingleConnectionHost(checkUrl, checkOrigUrl);
+
     if (useRange) {
         auto& settings = Settings::Instance();
-        bool adaptive = settings.GetAdaptiveSpeedSplitting();
+        bool adaptive = isSingleHost ? false : settings.GetAdaptiveSpeedSplitting();
         int initialParts = settings.GetInitialParts();
         int maxParts = settings.GetMaxParts();
 
@@ -776,7 +780,7 @@ void DownloadTask::WorkerLoop() {
         if (!hasResume) {
             std::lock_guard<std::mutex> lock(m_chunkMutex);
             m_chunks.clear();
-            int actualParts = adaptive ? initialParts : m_numParts;
+            int actualParts = isSingleHost ? 1 : (adaptive ? initialParts : m_numParts);
             if (actualParts > maxParts) actualParts = maxParts;
             if (actualParts > 12) actualParts = 12;
             if (actualParts < 1) actualParts = 1;
@@ -850,7 +854,7 @@ void DownloadTask::WorkerLoop() {
     }
 
     auto& settings = Settings::Instance();
-    bool adaptive = settings.GetAdaptiveSpeedSplitting();
+    bool adaptive = isSingleHost ? false : settings.GetAdaptiveSpeedSplitting();
     int maxParts = settings.GetMaxParts();
     int speedTier = settings.GetInternetSpeedTier();
 

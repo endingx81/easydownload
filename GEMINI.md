@@ -151,6 +151,12 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
      2. 윈도우 내 평균 속도를 구한 뒤 **지수이동평균(EMA, $\alpha=0.4$)**을 적용하여 패킷 수신 간격(지터)이 발생하더라도 속도 표시가 0으로 급락하지 않고 안정적이고 부드러운 체감 속도를 유지할 것.
      3. 일시정지, 취소, 다운로드 완료 시에는 `SpeedTracker`를 즉시 리셋하여 잔여 속도 잔상이 남지 않도록 할 것.
      4. 네트워크 단절이나 장시간 정체(>= 1.5초) 시에는 즉시 0으로 뚝 떨어뜨리지 않고 점진적으로 감쇠(Decay)시켜 현실적인 네트워크 지연을 반영할 것.
+8. **무료 파일 호스팅(Send, 1Fichier, Megaup 등) 단일 연결(Single Connection / parts=1) 강제 및 동적 분할 차단 원칙**:
+   - **실제 문제/실수**: Send.now(`datatransfer.to` CDN), 1Fichier, Megaup 등 무료 파일 호스팅 서비스는 무료 사용자의 다중 IP 연결 및 멀티파트 청크 다운로드를 엄격히 제한(차단/429/503/강제 연결 종료)함. 그럼에도 불구하고 기본값 8개 분할(`actualParts = 8`) 및 적응형 가속(`adaptive = true`)으로 8~12개 연결을 시도하여, 다운로드가 시작되자마자 서버로부터 연결이 튕기거나 IP가 일시 차단되는 심각한 결함 유발.
+   - **방지 원칙**:
+     1. `HttpEngine::IsSingleConnectionHost` 헬퍼를 두어 URL 또는 원본 URL(OriginalUrl)이 `send.now`, `send.cm`, `datatransfer.to`, `1fichier.com`, `megaup.net`, `nswvault.com` 등에 해당하는지 통합 판별할 것.
+     2. 대상 호스트 감지 시 `actualParts = 1`로 강제 고정하고, 적응형 가속(`adaptive = false`)을 원천 차단하여 단 1개의 연결 스트림으로 안전하게 파일 끝까지 수신할 것.
+     3. `NewDownloadDialog` 및 `일괄 링크 추출기` 탭에서도 해당 호스트가 감지되면 자동으로 분할 수를 1로 강제 설정하고, 파트 간에는 `m_dependsOnId` 기반 1개씩 순차 다운로드를 결합하여 호스트 차단을 100% 방어할 것.
 
 ### 🌐 크롬 확장 프로그램(Manifest V3) 및 로컬 브리지(Native Host / Local API) 규칙
 1. **Chrome 다운로드 인터셉트 무결성**:

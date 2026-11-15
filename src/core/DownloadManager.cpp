@@ -53,6 +53,9 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
     if (url.empty()) return nullptr;
 
     int actualParts = parts > 0 ? parts : Settings::Instance().GetInitialParts();
+    if (HttpEngine::IsSingleConnectionHost(url, referer)) {
+        actualParts = 1;
+    }
     std::wstring actualPath = savePath;
     bool isHlsResolved = isHls ||
                          SextbExtractor::IsSupported(url) ||

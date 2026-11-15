@@ -917,13 +917,14 @@ void MainWindow::OnBatchAdd(bool onlySelected) {
 
         bool startNow = (!isSequential || prevTaskId.empty());
         std::wstring dependsOn = isSequential ? prevTaskId : L"";
+        int parts = HttpEngine::IsSingleConnectionHost(downloadUrl, link.originalUrl) ? 1 : 0;
 
         auto task = DownloadManager::Instance().AddTask(
             downloadUrl,
             L"",
             link.originalUrl,
             L"",
-            0,
+            parts,
             startNow,
             false,
             dependsOn

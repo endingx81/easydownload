@@ -243,8 +243,8 @@ END
 
 // Version Information
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,5,1,0
-PRODUCTVERSION  1,5,1,0
+FILEVERSION     1,5,2,0
+PRODUCTVERSION  1,5,2,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -257,12 +257,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "ai-open.kr"
             VALUE "FileDescription", "EasyDownload"
-            VALUE "FileVersion", "1.5.1.0"
+            VALUE "FileVersion", "1.5.2.0"
             VALUE "InternalName", "easydownload.exe"
             VALUE "LegalCopyright", "Copyright (C) 2026 ai-open.kr. All rights reserved."
             VALUE "OriginalFilename", "easydownload.exe"
             VALUE "ProductName", "EasyDownload"
-            VALUE "ProductVersion", "1.5.1.0"
+            VALUE "ProductVersion", "1.5.2.0"
         END
     END
     BLOCK "VarFileInfo"

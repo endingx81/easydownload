@@ -103,6 +103,11 @@ static void UpdateSavePathFromUrl(HWND hDlg) {
         PathCombineW(combined, dir.c_str(), fname.c_str());
         std::wstring uniquePath = DownloadManager::Instance().GenerateUniqueSavePath(combined);
         SetDlgItemTextW(hDlg, IDC_EDT_SAVE_PATH, uniquePath.c_str());
+
+        if (HttpEngine::IsSingleConnectionHost(url)) {
+            SetDlgItemInt(hDlg, IDC_EDT_PARTS, 1, FALSE);
+            SendDlgItemMessage(hDlg, IDC_SPN_PARTS, UDM_SETPOS32, 0, 1);
+        }
     }
 }
 
@@ -113,6 +118,10 @@ INT_PTR CALLBACK NewDownloadDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM wPar
         SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)ctx);
 
         ForceForegroundWindow(hDlg);
+
+        if (HttpEngine::IsSingleConnectionHost(ctx->initUrl)) {
+            ctx->parts = 1;
+        }
 
         // Setup spinner (1 to 12)
         SendDlgItemMessage(hDlg, IDC_SPN_PARTS, UDM_SETRANGE32, 1, 12);
@@ -196,6 +205,9 @@ INT_PTR CALLBACK NewDownloadDialog::DialogProc(HWND hDlg, UINT uMsg, WPARAM wPar
                 ctx->url = urlBuf;
                 ctx->savePath = pathBuf;
                 ctx->parts = GetDlgItemInt(hDlg, IDC_EDT_PARTS, NULL, FALSE);
+                if (HttpEngine::IsSingleConnectionHost(ctx->url)) {
+                    ctx->parts = 1;
+                }
                 if (ctx->parts < 1) ctx->parts = 1;
                 if (ctx->parts > 12) ctx->parts = 12;
                 ctx->startImmediate = (IsDlgButtonChecked(hDlg, IDC_CHK_START_IMMEDIATE) == BST_CHECKED);
