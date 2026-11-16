@@ -7,7 +7,7 @@
 
 namespace EasyDownload {
 
-static const WCHAR* DEFAULT_USER_AGENT = L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+static const WCHAR* DEFAULT_USER_AGENT = L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 std::wstring HttpEngine::SanitizeFilename(const std::wstring& rawName, size_t maxLen) {
     std::wstring clean = rawName;

@@ -861,6 +861,10 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
      - 크롬 확장 프로그램(`background.js`)에서 인계 시 `navigator.userAgent`를 페이로드에 필수 동봉하고, `LocalServer` -> `DownloadRequest` -> `DownloadManager::AddTask` -> `DownloadTask` -> `HttpEngine`으로 온전히 전달하여 WinHTTP 세션 생성(`WinHttpOpen`) 시 해당 User-Agent를 정확하게 적용할 것.
   3. **직링크 보호 가드 (Already-Direct Guard)**:
      - 이미 `userAgent`와 `cookies`가 구비되어 인계되었거나, 도메인/경로에 CDN 직링크 특성(`download.megaup.net`, `1fichier.com/c`, `a-XX.1fichier.com`)이 있는 경우 `LinkExtractor::ResolveLink`의 재추출 대상에서 무조건 제외하여 유효한 직링크가 파괴되는 결함을 원천 방지할 것.
+  4. **링크 추출기(`LinkExtractor::Resolve1Fichier`) 내 직링크 대상 사전 탐색(`QueryUrlInfo`) 절대 금지 및 쿨다운 감지**:
+     - `DownloadTask` 본체에서는 `IsSingleConnectionHost`를 통해 사전 Probe를 우회하도록 잘 방어했으나, 정작 링크를 최초 발급하는 `LinkExtractor::Resolve1Fichier` 내부에서 직링크를 얻은 후 헤더 정보를 채운답시고 `HttpEngine::QueryUrlInfo(outDirectUrl)`를 호출함.
+     - 이로 인해 1회성 토큰(`a-XX.1fichier.com/cXXXXX`)이 다운로드 시작 직전에 1바이트 Range 요청으로 즉시 소진되어, 본체 다운로드 엔진이 접속했을 때는 **HTTP 410 Gone (`Expired/invalid token`)**이 반환되고 236분 IP 쿨다운이 걸리는 치명적 결함 발생.
+     - **방지 원칙**: 링크 추출기 내에서도 발급받은 직링크에 대해서는 절대로 `QueryUrlInfo`를 호출하지 말 것. 파일명과 용량은 랜딩 페이지 HTML(`<span class="tier-name">`, `<span class="tier-feat">`)에서 정규식으로 안전하게 파싱하고, 직링크는 온전한 미사용 상태 그대로 본체 `DownloadDirectStream`으로 넘길 것. 또한 1fichier 무료 쿨다운(대기 시간) 감지 시 무의미한 에러 대신 정확한 대기 분(`N분 대기 필요`)을 사용자에게 통지할 것.
 
 ---
 

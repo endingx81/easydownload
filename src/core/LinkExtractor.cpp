@@ -534,10 +534,23 @@ bool LinkExtractor::Resolve1Fichier(
     }
 
     // Extract size from <span class="tier-feat">([^<]+)</span>
-    std::regex sizeRegex(R"(<span[^>]*class=["']tier-feat["'][^>]*>([0-9.]+\s*[GMK]B)</span>)", std::regex_constants::icase);
+    std::regex sizeRegex(R"(<span[^>]*class=["']tier-feat["'][^>]*>([0-9.]+)\s*([GMK]?B)</span>)", std::regex_constants::icase);
     std::smatch mSize;
     if (std::regex_search(html, mSize, sizeRegex)) {
-        // Size string successfully detected in 1Fichier page
+        try {
+            double val = std::stod(mSize[1].str());
+            std::string unit = mSize[2].str();
+            for (auto& c : unit) c = (char)toupper(c);
+            if (unit.find("GB") != std::string::npos) {
+                outFileSize = (int64_t)(val * 1024.0 * 1024.0 * 1024.0);
+            } else if (unit.find("MB") != std::string::npos) {
+                outFileSize = (int64_t)(val * 1024.0 * 1024.0);
+            } else if (unit.find("KB") != std::string::npos) {
+                outFileSize = (int64_t)(val * 1024.0);
+            } else {
+                outFileSize = (int64_t)val;
+            }
+        } catch (...) {}
     }
 
     // 2. Send POST with submit=Free download to trigger direct link generation
@@ -642,14 +655,21 @@ bool LinkExtractor::Resolve1Fichier(
             outDirectUrl.assign(sz, 0);
             MultiByteToWideChar(CP_UTF8, 0, rawLink.data(), (int)rawLink.size(), &outDirectUrl[0], sz);
 
-            // Query Url Info for direct URL size & final filename
-            HttpHeadInfo headInfo;
-            if (HttpEngine::QueryUrlInfo(outDirectUrl, fUrl, L"", headInfo)) {
-                if (headInfo.contentLength > 0) outFileSize = headInfo.contentLength;
-                if (!headInfo.filename.empty() && outFilename.empty()) outFilename = headInfo.filename;
-            }
+            // CRITICAL: Do NOT query outDirectUrl with QueryUrlInfo!
+            // 1fichier free-tier direct links are strict one-time access tokens.
+            // Any prior HEAD/GET probe burns the token immediately, resulting in 410 Gone on actual download!
             return true;
         }
+    }
+
+    // Check if 1Fichier free tier imposed a waiting time / cooldown
+    std::regex waitRegex(R"(wait\s+([0-9]+)\s*minutes)", std::regex_constants::icase);
+    std::smatch mWait;
+    if (std::regex_search(postHtml, mWait, waitRegex) || std::regex_search(html, mWait, waitRegex)) {
+        try {
+            outDirectUrl = L"WAIT:" + std::to_wstring(std::stoi(mWait[1].str()));
+        } catch (...) {}
+        return false;
     }
 
     return false;
@@ -756,12 +776,21 @@ bool LinkExtractor::ResolveLink(ExtractedLink& link, std::atomic<bool>& abortFla
             link.statusMessage = L"직링크 준비 완료 (1Fichier 초고속)";
             return true;
         } else {
+            if (directUrl.rfind(L"WAIT:", 0) == 0) {
+                std::wstring mins = directUrl.substr(5);
+                link.directUrl = targetUrl;
+                if (!filename.empty()) link.filename = filename;
+                else link.filename = HttpEngine::ExtractFilenameFromUrl(targetUrl);
+                link.status = LinkStatus::Failed;
+                link.statusMessage = L"1Fichier 무료 다운로드 쿨다운: " + mins + L"분 대기 필요 (IP 변경 또는 대기)";
+                return false;
+            }
             link.directUrl = targetUrl;
             if (!filename.empty()) link.filename = filename;
             else link.filename = HttpEngine::ExtractFilenameFromUrl(targetUrl);
-            link.status = LinkStatus::Resolved;
-            link.statusMessage = L"1Fichier 링크 준비 완료 (대기 시간 후 시작)";
-            return true;
+            link.status = LinkStatus::Failed;
+            link.statusMessage = L"1Fichier 직링크 발급 실패 (대기 시간 또는 링크 만료)";
+            return false;
         }
     } else if (link.hostName == L"Megaup") {
         std::wstring directUrl;

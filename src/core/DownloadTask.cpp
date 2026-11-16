@@ -771,9 +771,14 @@ void DownloadTask::WorkerLoop() {
         HttpHeadInfo info;
         HANDLE hTargetFile = INVALID_HANDLE_VALUE;
 
+        std::wstring effectiveRef = m_referer;
+        if (effectiveRef.empty() && !orig.empty() && orig != m_url) {
+            effectiveRef = orig;
+        }
+
         bool ok = HttpEngine::DownloadDirectStream(
             m_url,
-            m_referer,
+            effectiveRef,
             m_cookies,
             m_userAgent,
             m_downloadedBytes.load(),
@@ -895,6 +900,8 @@ void DownloadTask::WorkerLoop() {
                 if (m_errorMessage.empty()) {
                     if (info.statusCode == 403) {
                         m_errorMessage = L"접근 거부(403 Forbidden) - 인간 확인(Cloudflare Turnstile) 또는 1회성 토큰 만료";
+                    } else if (info.statusCode == 410) {
+                        m_errorMessage = L"1회성 다운로드 토큰 만료(410 Gone) - 이미 사용된 직링크이거나 쿨다운 대기 필요";
                     } else if (info.statusCode > 0) {
                         m_errorMessage = L"HTTP 오류 코드: " + std::to_wstring(info.statusCode);
                     } else {
