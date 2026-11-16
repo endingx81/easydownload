@@ -332,11 +332,11 @@ bool HttpEngine::QueryUrlInfo(
     DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
     WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
 
-    // Disable auto-decompression so Content-Length matches the actual raw byte count
-    DWORD autoDecomp = WINHTTP_DECOMPRESSION_FLAG_GZIP | WINHTTP_DECOMPRESSION_FLAG_DEFLATE;
+    // Explicitly disable auto-decompression so Content-Length matches the actual raw byte count
+    DWORD autoDecomp = 0;
     WinHttpSetOption(hRequest, WINHTTP_OPTION_DECOMPRESSION, &autoDecomp, sizeof(autoDecomp));
 
-    std::wstring headers = L"Range: bytes=0-0\r\n";
+    std::wstring headers = L"Range: bytes=0-0\r\nAccept-Encoding: identity\r\n";
     if (!cookies.empty()) {
         headers += L"Cookie: " + cookies + L"\r\n";
     }
@@ -531,11 +531,15 @@ bool HttpEngine::DownloadRange(
     DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
     WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
 
-    std::wstring headers;
+    // Explicitly disable auto-decompression so Range requests match raw binary byte count
+    DWORD autoDecomp = 0;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_DECOMPRESSION, &autoDecomp, sizeof(autoDecomp));
+
+    std::wstring headers = L"Accept-Encoding: identity\r\n";
     if (startByte >= 0 && endByte >= startByte) {
-        headers = L"Range: bytes=" + std::to_wstring(startByte) + L"-" + std::to_wstring(endByte) + L"\r\n";
+        headers += L"Range: bytes=" + std::to_wstring(startByte) + L"-" + std::to_wstring(endByte) + L"\r\n";
     } else if (startByte > 0) {
-        headers = L"Range: bytes=" + std::to_wstring(startByte) + L"-\r\n";
+        headers += L"Range: bytes=" + std::to_wstring(startByte) + L"-\r\n";
     }
     if (!cookies.empty()) {
         headers += L"Cookie: " + cookies + L"\r\n";
@@ -724,13 +728,13 @@ bool HttpEngine::DownloadDirectStream(
     DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
     WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
 
-    // Disable auto-decompression so Content-Length matches raw binary byte count
-    DWORD autoDecomp = WINHTTP_DECOMPRESSION_FLAG_GZIP | WINHTTP_DECOMPRESSION_FLAG_DEFLATE;
+    // Explicitly disable auto-decompression so Content-Length matches raw binary byte count
+    DWORD autoDecomp = 0;
     WinHttpSetOption(hRequest, WINHTTP_OPTION_DECOMPRESSION, &autoDecomp, sizeof(autoDecomp));
 
-    std::wstring headers;
+    std::wstring headers = L"Accept-Encoding: identity\r\n";
     if (startByte > 0) {
-        headers = L"Range: bytes=" + std::to_wstring(startByte) + L"-\r\n";
+        headers += L"Range: bytes=" + std::to_wstring(startByte) + L"-\r\n";
     }
     if (!cookies.empty()) {
         headers += L"Cookie: " + cookies + L"\r\n";

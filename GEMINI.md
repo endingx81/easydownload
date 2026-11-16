@@ -861,3 +861,19 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
      - 크롬 확장 프로그램(`background.js`)에서 인계 시 `navigator.userAgent`를 페이로드에 필수 동봉하고, `LocalServer` -> `DownloadRequest` -> `DownloadManager::AddTask` -> `DownloadTask` -> `HttpEngine`으로 온전히 전달하여 WinHTTP 세션 생성(`WinHttpOpen`) 시 해당 User-Agent를 정확하게 적용할 것.
   3. **직링크 보호 가드 (Already-Direct Guard)**:
      - 이미 `userAgent`와 `cookies`가 구비되어 인계되었거나, 도메인/경로에 CDN 직링크 특성(`download.megaup.net`, `1fichier.com/c`, `a-XX.1fichier.com`)이 있는 경우 `LinkExtractor::ResolveLink`의 재추출 대상에서 무조건 제외하여 유효한 직링크가 파괴되는 결함을 원천 방지할 것.
+
+---
+
+### 📦 바이너리/설치 파일 다운로드 시 Content-Encoding 압축 해제 비활성화(autoDecomp = 0) 및 `Accept-Encoding: identity` 강제 원칙
+- **실제 실수 및 치명적 버그**:
+  - Google CDN(`edgedl.me.gvt1.com`) 등 최신 CDN 서버에서 Antigravity IDE 설치 파일(`Antigravity IDE.exe`)을 다운로드할 때, 클라이언트가 `Accept-Encoding: gzip`을 지원한다고 알리면 서버는 gzip으로 압축된 스트림(199,194,160 바이트)을 전송하고 `Content-Encoding: gzip`, `x-identity-content-length: 199649432`를 응답함.
+  - `HttpEngine.cpp`에서 `QueryUrlInfo` 요청 시 `autoDecomp = WINHTTP_DECOMPRESSION_FLAG_GZIP | WINHTTP_DECOMPRESSION_FLAG_DEFLATE`가 켜져 있어 WinHttp가 자동으로 `Accept-Encoding: gzip`을 헤더에 삽입했고, 헤더 조회의 `Content-Length`가 압축 크기인 199,194,160 바이트로 잘못 등록됨.
+  - 하지만 실제 멀티파트 분할 다운로드(`DownloadRange`) 루프에서는 압축 해제 없이 원본 무압축 바이트 스트림을 그대로 수신하여 타겟 파일에 기록함. 이로 인해 원본 크기인 199,649,432 바이트 중 잘못 등록된 199,194,160 바이트까지만 받고 다운로드를 종료하여, **파일 끝단의 455,272 바이트(455 KB, 디지털 서명 Authenticode 및 무결성 트레일러 영역)가 잘려나간 채 저장**됨.
+  - 사용자가 이 파일을 실행하자 Windows 설치 마법사가 `"setup file are corrupt"` 오류 창을 띄우며 설치가 완전히 실패함.
+- **방지 원칙 (Binary Integrity & Identity Encoding 파이프라인)**:
+  1. **WinHttp 자동 압축 해제 영구 비활성화 (`autoDecomp = 0`)**:
+     - `QueryUrlInfo`, `DownloadRange`, `DownloadDirectStream` 등 다운로더의 모든 HTTP 요청 핸들에 대해 `DWORD autoDecomp = 0; WinHttpSetOption(hRequest, WINHTTP_OPTION_DECOMPRESSION, &autoDecomp, sizeof(autoDecomp));`를 필수로 적용할 것.
+  2. **`Accept-Encoding: identity` 명시적 강제**:
+     - CDN 및 프록시가 임의로 바이너리 파일을 gzip/deflate/br 등으로 압축하거나 전송 인코딩을 변형하지 못하도록, 요청 헤더에 반드시 `Accept-Encoding: identity\r\n`을 최우선 명시할 것.
+  3. **헤더 크기와 스트림 크기의 100% 일치 보장**:
+     - 다운로드 가속기는 원본 파일의 순수 1:1 바이너리 바이트 스트림을 조각별로 나누어 쓰는 구조이므로, 헤더에서 보고된 `Content-Length`와 디스크에 기록되는 바이트 오프셋이 단 1바이트의 오차도 없이 완벽하게 일치해야 함. 압축 인코딩을 원천 배제함으로써 디지털 서명 잘림 및 설치 파일 손상(`corrupt`)을 100% 영구 방지할 것.
