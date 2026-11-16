@@ -28,6 +28,7 @@
 #define ID_CHROME_DOH_TOGGLE            1017
 #define ID_TASK_BATCH_EXTRACT           1018
 #define ID_TASK_OPEN_BROWSER            1019
+#define ID_TASK_IMPORT_EGPART           1020
 
 // Dialogs
 #define IDD_NEW_DOWNLOAD                2001

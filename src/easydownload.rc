@@ -15,6 +15,8 @@ BEGIN
         MENUITEM "새 다운로드(&N)...\tCtrl+N",         ID_TASK_NEW
         MENUITEM "비디오 다운로드(&V)...\tCtrl+V",     ID_TASK_NEW_VIDEO
         MENUITEM SEPARATOR
+        MENUITEM "미완성 다운로드 복구(.egpart)(&R)...", ID_TASK_IMPORT_EGPART
+        MENUITEM SEPARATOR
         MENUITEM "종료(&X)",                         ID_APP_EXIT
     END
     POPUP "작업(&T)"
@@ -46,6 +48,7 @@ BEGIN
         MENUITEM SEPARATOR
         MENUITEM "새 다운로드...",                   ID_TASK_NEW
         MENUITEM "비디오 다운로드...",               ID_TASK_NEW_VIDEO
+        MENUITEM "미완성 다운로드 복구(.egpart)...", ID_TASK_IMPORT_EGPART
         MENUITEM SEPARATOR
         MENUITEM "환경 설정(&S)...",                 ID_TASK_SETTINGS
         MENUITEM SEPARATOR
@@ -242,8 +245,8 @@ END
 
 // Version Information
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,5,9,0
-PRODUCTVERSION  1,5,9,0
+FILEVERSION     1,6,0,0
+PRODUCTVERSION  1,6,0,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -256,12 +259,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "ai-open.kr"
             VALUE "FileDescription", "EasyDownload"
-            VALUE "FileVersion", "1.5.9.0"
+            VALUE "FileVersion", "1.6.0.0"
             VALUE "InternalName", "easydownload.exe"
             VALUE "LegalCopyright", "Copyright (C) 2026 ai-open.kr. All rights reserved."
             VALUE "OriginalFilename", "easydownload.exe"
             VALUE "ProductName", "EasyDownload"
-            VALUE "ProductVersion", "1.5.9.0"
+            VALUE "ProductVersion", "1.6.0.0"
         END
     END
     BLOCK "VarFileInfo"

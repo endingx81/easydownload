@@ -15,6 +15,7 @@
 #include "../core/HlsDownloader.h"
 #include <shlwapi.h>
 #include <shellapi.h>
+#include <commdlg.h>
 #include <sstream>
 #include <iomanip>
 
@@ -429,6 +430,27 @@ void MainWindow::OnNewVideoDownload(
     }
 }
 
+void MainWindow::OnImportEgpart() {
+    WCHAR fileBuf[MAX_PATH] = { 0 };
+    OPENFILENAMEW ofn = { sizeof(OPENFILENAMEW) };
+    ofn.hwndOwner = m_hWnd;
+    ofn.lpstrFile = fileBuf;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter = L"EasyDownload Part 파일 (*.egpart)\0*.egpart\0모든 파일 (*.*)\0*.*\0";
+    ofn.lpstrTitle = L"미완성 다운로드 복구 (.egpart 선택)";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+
+    if (GetOpenFileNameW(&ofn)) {
+        std::wstring error;
+        if (DownloadManager::Instance().ImportEgpartFile(fileBuf, error)) {
+            RefreshTasksList();
+            MessageBoxW(m_hWnd, L"미완성 다운로드 작업이 복구되었습니다.\n목록에서 '시작'을 누르면 이전 지점부터 이어받기가 진행됩니다.", L"다운로드 복구 완료", MB_OK | MB_ICONINFORMATION);
+        } else {
+            MessageBoxW(m_hWnd, (L"다운로드 복구 실패:\n" + error).c_str(), L"알림", MB_OK | MB_ICONWARNING);
+        }
+    }
+}
+
 void MainWindow::OnStartSelected() {
     auto tasks = DownloadManager::Instance().GetAllTasks();
     std::vector<std::wstring> taskIds;
@@ -677,6 +699,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         switch (id) {
         case ID_TASK_NEW: OnNewDownload(); break;
         case ID_TASK_NEW_VIDEO: OnNewVideoDownload(); break;
+        case ID_TASK_IMPORT_EGPART: OnImportEgpart(); break;
         case ID_TASK_START: OnStartSelected(); break;
         case ID_TASK_PAUSE: OnPauseSelected(); break;
         case ID_TASK_DELETE: OnDeleteSelected(); break;
@@ -698,7 +721,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             DestroyWindow(m_hWnd);
             break;
         case ID_ABOUT:
-            MessageBoxW(m_hWnd, L"EasyDownload v1.5.9\n\n초고속 멀티스레드 분할 다운로드 가속기\n크롬 확장 연동 및 비디오 스트림 다운로더\nYouTube / M3U8 고화질 자동 병합 다운로더\nChrome 보안 DNS(DoH) & DPI 차단 우회 내장",
+            MessageBoxW(m_hWnd, L"EasyDownload v1.6.0\n\n초고속 멀티스레드 분할 다운로드 가속기\n크롬 확장 연동 및 비디오 스트림 다운로더\nYouTube / M3U8 고화질 자동 병합 다운로더\nChrome 보안 DNS(DoH) & DPI 차단 우회 내장",
                 L"EasyDownload 정보", MB_OK | MB_ICONINFORMATION);
             break;
         }

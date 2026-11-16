@@ -38,6 +38,7 @@ private:
 
     void OnNewDownload();
     void OnNewVideoDownload(const std::wstring& initUrl = L"", const std::wstring& initTitle = L"", const std::wstring& referer = L"", const std::wstring& cookies = L"");
+    void OnImportEgpart();
     void OnStartSelected();
     void OnPauseSelected();
     void OnDeleteSelected();

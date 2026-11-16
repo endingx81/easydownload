@@ -375,6 +375,13 @@ std::wstring DownloadManager::GenerateUniqueSavePath(const std::wstring& targetP
         return targetPath;
     }
 
+    // If an incomplete download (.egpart) exists on disk and no active task is currently using targetPath,
+    // reuse the targetPath without appending (1), allowing seamless resume!
+    std::wstring partFile = targetPath + L".egpart";
+    if (PathFileExistsW(partFile.c_str()) && !IsSavePathInUse(targetPath)) {
+        return targetPath;
+    }
+
     WCHAR dir[MAX_PATH] = { 0 };
     wcscpy_s(dir, targetPath.c_str());
     PathRemoveFileSpecW(dir);
@@ -402,6 +409,115 @@ std::wstring DownloadManager::GenerateUniqueSavePath(const std::wstring& targetP
     }
 
     return targetPath;
+}
+
+bool DownloadManager::ImportEgpartFile(const std::wstring& egpartPath, std::wstring& outError) {
+    if (egpartPath.empty() || !PathFileExistsW(egpartPath.c_str())) {
+        outError = L"선택한 .egpart 파일이 존재하지 않습니다.";
+        return false;
+    }
+
+    if (egpartPath.length() < 7 || _wcsicmp(egpartPath.c_str() + egpartPath.length() - 7, L".egpart") != 0) {
+        outError = L"올바른 .egpart 확장자 파일이 아닙니다.";
+        return false;
+    }
+
+    std::wstring targetFilePath = egpartPath.substr(0, egpartPath.length() - 7);
+    if (!PathFileExistsW(targetFilePath.c_str())) {
+        outError = L"미완성 대상 데이터 파일(" + targetFilePath + L")이 존재하지 않습니다.";
+        return false;
+    }
+
+    if (IsSavePathInUse(targetFilePath)) {
+        outError = L"해당 파일은 이미 다운로드 목록에 등록되어 있습니다.";
+        return false;
+    }
+
+    std::ifstream in(egpartPath, std::ios::binary);
+    if (!in) {
+        outError = L".egpart 파일을 읽을 수 없습니다.";
+        return false;
+    }
+
+    auto s2w = [](const std::string& s) {
+        if (s == "-" || s.empty()) return std::wstring(L"");
+        int sz = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), NULL, 0);
+        std::wstring w(sz, 0);
+        MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &w[0], sz);
+        return w;
+    };
+
+    auto trim = [](std::string& s) {
+        while (!s.empty() && (s.back() == '\r' || s.back() == '\n' || s.back() == ' ' || s.back() == '\t')) s.pop_back();
+    };
+
+    std::string firstLine;
+    if (!std::getline(in, firstLine)) {
+        outError = L".egpart 파일 내용이 비어 있습니다.";
+        return false;
+    }
+    trim(firstLine);
+
+    std::wstring url, origUrl, referer, userAgent;
+    int64_t totalBytes = 0;
+    size_t chunkCount = 0;
+
+    if (firstLine == "EGPART_V2") {
+        std::string line;
+        while (std::getline(in, line)) {
+            trim(line);
+            if (line.rfind("URL: ", 0) == 0) {
+                url = s2w(line.substr(5));
+            } else if (line.rfind("ORIG_URL: ", 0) == 0) {
+                origUrl = s2w(line.substr(10));
+            } else if (line.rfind("REFERER: ", 0) == 0) {
+                referer = s2w(line.substr(9));
+            } else if (line.rfind("USER_AGENT: ", 0) == 0) {
+                userAgent = s2w(line.substr(12));
+            } else if (line.rfind("TOTAL_BYTES: ", 0) == 0) {
+                try { totalBytes = std::stoll(line.substr(13)); } catch (...) {}
+            } else if (line.rfind("CHUNKS: ", 0) == 0) {
+                try { chunkCount = std::stoull(line.substr(8)); } catch (...) {}
+                break;
+            }
+        }
+    } else {
+        // Legacy v1 format
+        try {
+            totalBytes = std::stoll(firstLine);
+            in >> chunkCount;
+        } catch (...) {
+            outError = L"유효하지 않은 .egpart 파일 형식입니다.";
+            return false;
+        }
+    }
+
+    std::wstring downloadUrl = !origUrl.empty() ? origUrl : url;
+    if (downloadUrl.empty()) {
+        outError = L".egpart 파일에 다운로드 URL 출처가 저장되어 있지 않습니다 (구버전 파일).\n'새 다운로드'에 URL을 입력하시면 기존 .egpart 파일에 이어받기가 자동 연결됩니다.";
+        return false;
+    }
+
+    int parts = (chunkCount > 0 && chunkCount <= 12) ? (int)chunkCount : 8;
+    auto task = std::make_shared<DownloadTask>(downloadUrl, targetFilePath, referer, L"", parts, userAgent);
+    if (!origUrl.empty()) task->SetOriginalUrl(origUrl);
+    if (!url.empty()) task->SetUrl(url);
+
+    task->SetLoadedState(TaskStatus::Paused);
+
+    task->SetOnStatusChanged([this](DownloadTask*) {
+        CheckQueue();
+        if (m_onTasksUpdated) m_onTasksUpdated();
+    });
+
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_tasks.push_back(task);
+    }
+
+    SaveTasks();
+    if (m_onTasksUpdated) m_onTasksUpdated();
+    return true;
 }
 
 } // namespace EasyDownload

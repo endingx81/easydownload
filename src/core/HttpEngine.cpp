@@ -854,7 +854,7 @@ bool HttpEngine::DownloadDirectStream(
     // Stream directly into file
     bool success = false;
     std::vector<char> buffer(64 * 1024);
-    int64_t currentFileOffset = startByte > 0 ? startByte : 0;
+    int64_t currentFileOffset = (startByte > 0 && statusCode == 206) ? startByte : 0;
 
     while (!abortFlag && !pauseFlag) {
         DWORD bytesRead = 0;

@@ -41,7 +41,7 @@
 
 ### 1. 데스크톱 앱 실행 또는 설치
 - **간편 설치**: `EasyDownload_Setup.exe` 실행 (바탕화면 및 시작 메뉴 바로가기 자동 등록)
-- **무설치 포터블**: `EasyDownload_v1.5.9_Portable.zip` 압축 해제 후 `easydownload.exe` 실행
+- **무설치 포터블**: `EasyDownload_v1.6.0_Portable.zip` 압축 해제 후 `easydownload.exe` 실행
 
 ### 2. Chrome 확장 프로그램 등록 방법 (10초 소요)
 1. Chrome 브라우저 주소창에 `chrome://extensions` 입력 후 이동.

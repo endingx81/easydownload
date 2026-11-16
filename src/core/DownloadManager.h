@@ -43,6 +43,7 @@ public:
 
     std::wstring GenerateUniqueSavePath(const std::wstring& targetPath) const;
     bool IsSavePathInUse(const std::wstring& path) const;
+    bool ImportEgpartFile(const std::wstring& egpartPath, std::wstring& outError);
 
 private:
     DownloadManager() = default;

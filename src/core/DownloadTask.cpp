@@ -210,9 +210,26 @@ void DownloadTask::SaveResumeState() {
     std::ofstream out(partFile, std::ios::binary | std::ios::trunc);
     if (!out) return;
 
-    out << m_totalBytes << "\n";
+    auto w2s = [](const std::wstring& w) {
+        if (w.empty()) return std::string("-");
+        int sz = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), NULL, 0, NULL, NULL);
+        std::string s(sz, 0);
+        WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), &s[0], sz, NULL, NULL);
+        return s;
+    };
+
+    out << "EGPART_V2\n";
+    {
+        std::lock_guard<std::mutex> lk(m_metaMutex);
+        out << "URL: " << w2s(m_url) << "\n";
+        out << "ORIG_URL: " << w2s(m_originalUrl) << "\n";
+        out << "REFERER: " << w2s(m_referer) << "\n";
+        out << "USER_AGENT: " << w2s(m_userAgent) << "\n";
+    }
+    out << "TOTAL_BYTES: " << m_totalBytes << "\n";
+
     std::lock_guard<std::mutex> lock(m_chunkMutex);
-    out << m_chunks.size() << "\n";
+    out << "CHUNKS: " << m_chunks.size() << "\n";
     for (const auto& cp : m_chunks) {
         out << cp.index << " " << cp.startByte << " " << cp.endByte << " "
             << cp.downloadedBytes << " " << (cp.completed ? 1 : 0) << "\n";
@@ -224,10 +241,69 @@ bool DownloadTask::LoadResumeState() {
     std::ifstream in(partFile, std::ios::binary);
     if (!in) return false;
 
+    auto s2w = [](const std::string& s) {
+        if (s == "-" || s.empty()) return std::wstring(L"");
+        int sz = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), NULL, 0);
+        std::wstring w(sz, 0);
+        MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &w[0], sz);
+        return w;
+    };
+
+    auto trim = [](std::string& s) {
+        while (!s.empty() && (s.back() == '\r' || s.back() == '\n' || s.back() == ' ' || s.back() == '\t')) s.pop_back();
+    };
+
+    std::string firstLine;
+    if (!std::getline(in, firstLine)) return false;
+    trim(firstLine);
+
     int64_t totalBytes = 0;
     size_t chunkCount = 0;
-    if (!(in >> totalBytes >> chunkCount)) return false;
-    if (totalBytes != m_totalBytes || chunkCount == 0) return false;
+
+    if (firstLine == "EGPART_V2") {
+        std::string line;
+        while (std::getline(in, line)) {
+            trim(line);
+            if (line.rfind("URL: ", 0) == 0) {
+                std::wstring u = s2w(line.substr(5));
+                std::lock_guard<std::mutex> lk(m_metaMutex);
+                if (m_url.empty() && !u.empty()) m_url = u;
+            } else if (line.rfind("ORIG_URL: ", 0) == 0) {
+                std::wstring ou = s2w(line.substr(10));
+                std::lock_guard<std::mutex> lk(m_metaMutex);
+                if (m_originalUrl.empty() && !ou.empty()) m_originalUrl = ou;
+            } else if (line.rfind("REFERER: ", 0) == 0) {
+                std::wstring r = s2w(line.substr(9));
+                std::lock_guard<std::mutex> lk(m_metaMutex);
+                if (m_referer.empty() && !r.empty()) m_referer = r;
+            } else if (line.rfind("USER_AGENT: ", 0) == 0) {
+                std::wstring ua = s2w(line.substr(12));
+                std::lock_guard<std::mutex> lk(m_metaMutex);
+                if (m_userAgent.empty() && !ua.empty()) m_userAgent = ua;
+            } else if (line.rfind("TOTAL_BYTES: ", 0) == 0) {
+                try { totalBytes = std::stoll(line.substr(13)); } catch (...) {}
+            } else if (line.rfind("CHUNKS: ", 0) == 0) {
+                try { chunkCount = std::stoull(line.substr(8)); } catch (...) {}
+                break;
+            }
+        }
+    } else {
+        // Legacy v1 parser: first line is totalBytes
+        try {
+            totalBytes = std::stoll(firstLine);
+            in >> chunkCount;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    if (chunkCount == 0) return false;
+    if (m_totalBytes > 0 && totalBytes > 0 && m_totalBytes != totalBytes) {
+        return false;
+    }
+    if (m_totalBytes <= 0 && totalBytes > 0) {
+        m_totalBytes = totalBytes;
+    }
 
     std::vector<ChunkProgress> loaded;
     int64_t totalDown = 0;
@@ -752,6 +828,16 @@ void DownloadTask::WorkerLoop() {
         m_status = TaskStatus::Downloading;
         if (m_onStatusChanged) m_onStatusChanged(this);
 
+        // Check if we have an existing resume state
+        bool hasResume = LoadResumeState();
+
+        // 1Fichier free tier does NOT support Range! Never send startByte > 0 to 1fichier to prevent 410/416 burnout!
+        bool is1Fichier = (m_url.find(L"1fichier.com") != std::wstring::npos || orig.find(L"1fichier.com") != std::wstring::npos);
+        int64_t resumeStartByte = (hasResume && !is1Fichier) ? m_downloadedBytes.load() : 0;
+        if (is1Fichier) {
+            m_downloadedBytes = 0;
+        }
+
         m_speedTracker.Reset();
         m_speedTracker.Update(m_downloadedBytes.load());
 
@@ -781,7 +867,7 @@ void DownloadTask::WorkerLoop() {
             effectiveRef,
             m_cookies,
             m_userAgent,
-            m_downloadedBytes.load(),
+            resumeStartByte,
             m_abortFlag,
             m_pauseFlag,
             [this](int64_t bytesRead) {
@@ -855,6 +941,12 @@ void DownloadTask::WorkerLoop() {
                     li.QuadPart = m_totalBytes;
                     SetFilePointerEx(hTargetFile, li, NULL, FILE_BEGIN);
                     SetEndOfFile(hTargetFile);
+
+                    // If server didn't return 206 Partial Content, Range was ignored and server sends from 0
+                    if (headInfo.statusCode != 206) {
+                        m_downloadedBytes = 0;
+                    }
+
                     li.QuadPart = m_downloadedBytes.load();
                     SetFilePointerEx(hTargetFile, li, NULL, FILE_BEGIN);
                 }
