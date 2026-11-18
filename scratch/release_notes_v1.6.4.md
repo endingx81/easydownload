@@ -32,4 +32,5 @@
 
 ### 📦 배포 산출물
 - `EasyDownload_Setup.exe` (v1.6.4 단일 설치 파일, EasyInstall 패키징)
+- `EasyDownload_v1.6.4_Setup.zip` (v1.6.4 설치 파일 압축본)
 - `EasyDownload_v1.6.4_Portable.zip` (v1.6.4 무설치 포터블 압축본)
