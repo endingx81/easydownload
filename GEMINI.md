@@ -185,6 +185,11 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
    - 단순 파싱 시 비디오 100% 완료 후 오디오 수신 시 게이지가 0%로 리셋되어 "2번 다운로드" 혼선을 초래하므로, 비디오(0%~90%), 오디오(90%~98%), FFmpeg 조립(99%)으로 진행률을 선형 매핑하고 누적 용량을 연속 합산하여 게이지 역행(Regress) 없이 100%까지 매끄럽게 연결할 것.
    - **HLS/DASH 세그먼트 파싱 시 `frag 0/` 헤더 오판 방지**: yt-dlp가 HLS/쇼츠 다운로드 시 첫 0.1초 동안 712B짜리 초기화 헤더(`frag 0/N`)를 받고 `100.0%`를 출력할 때, 이를 전체 비디오 완료로 오판하여 게이지를 즉시 90%로 올리고 오디오 상태로 전환해 다운로드 시작부터 90%에 고정되는 치명적 버그를 원천 차단할 것 (`frag 0/` 라인은 진행률 계산에서 명시적 제외).
    - **오디오 스트림 판별은 퍼센트 급락 추정이 아닌 대상 파일 확장자로 엄격 판별**: `pct < 25%` 같은 임의의 수치 변화 추정을 배제하고, `Destination:` 라인의 확장자(`.m4a`, `.opus` 등)와 `Downloading 1 format(s): X+Y` 포맷을 통해 100% 확실하게 스트림 종류를 판별할 것.
+5. **유튜브 재생목록/라디오 파라미터(`&list=RD...`) 자동 정제 및 크롬 쿠키 연동 Fallback 원칙**:
+   - **실제 실수**: 사용자가 유튜브에서 믹스/라디오 모드로 영상을 보다가 크롬 확장의 영상 위 '다운로드' 버튼을 원클릭했을 때, 크롬 확장(`content.js`)이 현재 주소(`location.href`)의 `&list=RD...&start_radio=1` 파라미터를 그대로 넘김. 이로 인해 `yt-dlp`가 거대한 재생목록 탭 전체를 파싱하려다 초반 타임아웃/오류(`TaskStatus::Error`)를 뿜으며 멈추는 결함이 발생함. 심지어 에이전트가 이를 알아채지 못하고 사용자에게 "주소창에서 &list= 를 직접 떼고 수동 입력하라"는 엉뚱한 답변을 하여 사용자를 분노하게 만듦.
+   - **방지 원칙**:
+     1. 크롬 확장(`content.js`, `background.js`)과 데스크톱 코어(`DownloadTask`, `HlsDownloader`, `MainWindow`) 전 구간에서 유튜브 단일 영상 URL이 수신되면 `&list=`, `&start_radio=`, `&index=`, `&t=` 등 재생목록 및 추적 쿼리를 **자동으로 100% 잘라내어 순수 단일 영상 주소(`https://www.youtube.com/watch?v=VIDEO_ID`)로 사전 정제(CleanYouTubeUrl)**할 것. 이를 통해 사용자가 어떤 재생목록이나 라디오 모드에서 다운로드 버튼을 누르더라도 딜레이나 오류 없이 1초 만에 즉시 단일 영상 다운로드가 시작되도록 보장할 것.
+     2. **유튜브 쿠키 연동 실패 시 무쿠키 1회 자동 재시도 (Fallback) 필수**: 크롬에서 추출된 세션 쿠키(Netscape 쿠키)를 전달하여 다운로드할 때, 쿠키 만료나 구글의 자동화 요청 봇 감지로 인해 `yt-dlp`가 에러를 반환하는 경우 즉시 실패 처리하지 말고 **자동으로 쿠키를 제거한 순수 스트림으로 1회 즉시 재시도(Fallback)**하여 일반 공개 영상이 허무하게 실패하지 않도록 완벽 방어할 것.
 
 ---
 
@@ -898,3 +903,91 @@ AI 에이전트(당신)가 개발 중 **실제로 저질렀던 치명적인 실�
      - `GenerateUniqueSavePath`에서 대상 파일이 디스크에 존재하더라도 `*.egpart`가 함께 존재하고 현재 다른 작업이 사용 중이지 않다면 `(1)`을 붙이지 않고 기존 경로를 반환하여 기존 미완성 파일에 자동 연결되도록 할 것.
   4. **1회성 토큰 호스트(1fichier 등)의 Range 사전 Probe 금지 철칙 유지**:
      - 1fichier 등 무료 티어에서 Range 이어받기를 지원하지 않는 호스트는 절대로 `Range: bytes=N-`나 사전 Probe를 보내지 말고 `startByte = 0`으로 안전하게 단일 연결 직결 스트리밍할 것.
+
+---
+
+### 🛑 브라우저 확장 가로채기 시 비-GET(POST 폼 제출, 2FA 복구 코드 등) 및 세션 민감 파일 자동 바이패스 원칙
+- **실제 문제/실수**:
+  - GitHub 2단계 인증(2FA) 설정 과정에서 사용자가 복구 코드(`github-recovery-codes.txt`) 다운로드 버튼을 클릭했을 때, 크롬 확장 프로그램이 HTTP 메서드를 확인하지 않고 무조건 `chrome.downloads.cancel`로 크롬 다운로드를 취소한 후 EasyDownload로 URL을 전달함.
+  - 하지만 GitHub 복구 코드 다운로드는 단순 URL이 아니라 CSRF 토큰(`authenticity_token`)이 포함된 **`<form method="post">` 폼 제출** 방식이었음.
+  - 외부 데스크톱 앱(WinHttp)은 GET 방식으로 해당 URL에 접근하므로 GitHub 서버가 **`HTTP 404 Not Found`**(또는 422 Unprocessable Entity)를 응답하여 다운로드가 실패하고, 크롬의 원본 다운로드도 삭제되어 복구 코드를 분실하는 치명적 문제 발생.
+- **방지 원칙**:
+  1. **비-GET(POST 등) 요청 가로채기 절대 금지**:
+     - `item.method && item.method.toUpperCase() !== "GET"`인 경우, 외부 가속기가 브라우저의 폼 데이터(Payload)나 CSRF 토큰을 재현할 수 없으므로 무조건 가로채기를 중단하고 **크롬 브라우저가 원본대로 직접 네이티브 다운로드**하도록 즉시 반환(Bypass)할 것.
+  2. **계정/보안 세션 민감 경로 사전 필터링**:
+     - `/two_factor_authentication/`, `/recovery_download`, `/password_reset`, `/sessions`, `/login` 등 브라우저 내부 세션 전용 경로는 URL 단계에서 즉시 바이패스할 것.
+  3. **비-Range 단일 스트림 및 동적 스트리밍(`contentLength <= 0`) 완료 보장**:
+     - GitHub 코드 저장소 ZIP 다운로드(`archive/refs/heads/main.zip` -> `codeload.github.com`)처럼 Range를 지원하지 않고 청크 전송(`Content-Length: -1`)되는 스트림의 경우, `m_chunkDynamicEnds[0]`을 명시적으로 초기화하고 EOF(`bytesRead == 0`) 도달 시 수신 바이트 크기로 `m_totalBytes`를 최종 확정하여 100% 정상 완료를 보장할 것.
+
+---
+
+### 🎛️ 크롬 확장 프로그램 일반 파일 가속과 동영상 플로팅 다운로드 버튼의 독립적 제어(Option A) 원칙
+- **실제 문제/실수**:
+  - 확장 프로그램 팝업에 `[x] 브라우저 다운로드 자동 가속` 스위치 1개만 배치되어 있어, 사용자가 일반 파일 다운로드 가속을 끄더라도 웹페이지 동영상 플레이어 상단에 나타나는 파란색 [EasyDownload] 플로팅 버튼은 여전히 보이고 클릭 시 다운로드까지 진행됨.
+  - 사용자는 "스위치를 껐는데 왜 동영상 다운로드 버튼이 계속 보이고 동작하느냐"며 혼란을 겪음.
+- **방지 원칙**:
+  1. **독립된 2대 핵심 기능의 UI 분리 (Option A 표준)**:
+     - 팝업 하단에 스위치를 명확히 2개로 분리 제공:
+       1) `[x] 브라우저 파일 다운로드 가속` (`interceptDownloads`): 일반 파일(ZIP, EXE 등) 가로채기 ON/OFF
+       2) `[x] 동영상 다운로드 플로팅 버튼 표시` (`showVideoButtons`): 웹 비디오 플레이어 상단 버튼 ON/OFF
+  2. **DOM 인라인 버튼 실시간 갱신 및 완전 숨김**:
+     - `chrome.storage.onChanged`를 `content.js`에 연동하여, 사용자가 팝업에서 스위치를 끄는 순간 페이지 새로고침 없이도 현재 열려 있는 탭의 모든 비디오 플로팅 버튼이 `display: none`으로 즉시 사라지도록 구성할 것.
+
+---
+
+### 🎬 YouTube 채널 멤버십 및 연령 제한 동영상 다운로드를 위한 Netscape 쿠키 연동 및 오류 상세 안내 원칙
+- **실제 문제/실수**:
+  - 사용자가 YouTube 채널 멤버십에 가입되어 브라우저에서는 영상을 정상 시청할 수 있음에도, EasyDownload로 다운로드하면 `상태: 오류 (YouTube 다운로드 실패 (yt-dlp 실행 오류 또는 차단))`로 실패함.
+  - 원인:
+    1. 데스크톱 앱의 `DownloadTask` 및 `HlsDownloader`가 `yt-dlp`를 호출할 때 쿠키(`m_cookies`)를 전혀 전달하지 않아 비로그인(게스트) 세션으로 실행됨.
+    2. yt-dlp의 `--cookies-from-browser chrome` 옵션은 Windows 환경에서 Chrome이 실행 중일 때 브라우저의 SQLite 쿠키 DB 잠금(`LOCKED`) 및 신규 DPAPI 암호화(App-Bound Encryption)로 인해 실패함.
+    3. 반면 EasyDownload 크롬 확장 프로그램은 브라우저 내부에서 복호화된 쿠키(`chrome.cookies`)에 직접 접근할 수 있음에도, 단순 `name=value;` 문자열로만 넘기거나 YouTube 인증 도메인(`.youtube.com`, `.google.com`) 쿠키를 온전히 추출하지 않음.
+    4. 또한 `yt-dlp`가 출력한 구체적인 에러 메시지(예: `Join this channel to get access to members-only content`)를 캡처하지 않고 막연한 일반 오류 메시지만 표시하여 사용자가 원인을 알 수 없었음.
+- **방지 원칙 (Netscape Cookie Seamless Bridge & Error Surfacing)**:
+  1. **크롬 확장 프로그램의 표준 Netscape HTTP 쿠키 파일 포맷 변환 (`getYouTubeNetscapeCookies`)**:
+     - YouTube 다운로드 시 `youtube.com` 및 `google.com` 도메인의 모든 활성 세션 쿠키를 조회하여, yt-dlp 표준 규격인 7개 탭 구분자(`domain \t flag \t path \t secure \t expiration \t name \t value`)의 Netscape 쿠키 포맷 문자열로 변환하여 데스크톱 앱으로 전송할 것.
+  2. **안전한 임시 쿠키 파일 생성 및 RAII 자동 삭제 (`CreateTempCookieFile` + `TempCookieFileCleanup`)**:
+     - C++ 코어는 수신한 쿠키 문자열을 `%TEMP%\easydl_yt_cookies_<GUID>.txt` 임시 파일로 UTF-8 기록하고, `yt-dlp` 명령줄에 `--cookies "<파일경로>"`를 추가하여 실행할 것.
+     - 작업 완료(성공 또는 에러) 즉시 RAII 소멸자를 통해 디스크 상의 임시 쿠키 파일을 100% 안전하게 삭제(`DeleteFileW`)하여 사용자 개인정보 및 세션 토큰 유출을 원천 방지할 것.
+  3. **yt-dlp 에러 메시지 정밀 캡처 및 친절한 안내 (`pOutError`)**:
+     - `ERROR:` 라인을 실시간 파싱하여 `Join this channel` / `members-only` 감지 시 `"채널 멤버십 전용 동영상입니다. Chrome에서 해당 채널 회원으로 가입된 계정으로 로그인한 상태에서 다운로드해 주세요."`, 연령 제한 감지 시 `"연령 제한 동영상입니다. Chrome에서 성인 인증된 Google 계정으로 로그인한 상태에서 다운로드해 주세요."` 등 명확한 해결 가이드를 UI에 표시할 것.
+
+---
+
+### ⚠️ DownloadManager::AddTask 비동기 스레드 즉시 기동 시 메타데이터(`isAudioOnly`, `audioFormat`) 경합 상태(Race Condition) 방지 원칙
+- **실제 실수**:
+  - `isAudioOnly`와 `audioFormat` 프로퍼티를 추가할 때, `task = m_downloadManager->AddTask(url, savePath, ..., true);`로 작업을 등록한 뒤 반환받은 포인터로 `task->SetIsAudioOnly(isAudioOnly);`를 호출함.
+  - 하지만 `AddTask` 내부에서 `startImmediately = true`가 전달되면 워커 스레드(`WorkerLoop`)가 즉시 분기되어 비동기로 실행됨.
+  - 이로 인해 워커 스레드가 다른 CPU 코어에서 먼저 돌아 `HlsDownloader::DownloadWithYtDlp`로 진입한 뒤에야 메인 스레드의 `SetIsAudioOnly(true)`가 호출되는 심각한 **경합 상태(Race Condition)**가 발생함.
+  - 결과적으로 사용자가 YouTube에서 '🎵 MP3 오디오'를 선택했음에도 불구하고, 초기 플래그 미반영으로 인해 `.mp4` 대용량 동영상 스트림으로 다운로드되는 치명적 버그 유발.
+- **방지 원칙**:
+  1. `DownloadManager::AddTask` 시그니처 자체에 `bool isAudioOnly = false, const std::wstring& audioFormat = L"mp3"`를 기본 매개변수로 명시적으로 추가할 것.
+  2. 작업 객체(`DownloadTask`)를 생성한 직후이자 `task->Start()`를 호출하기 **이전(동기 구간)**에 모든 스트림 모드 메타데이터를 100% 주입 완료할 것.
+  3. 작업 스레드가 기동된 이후 외부에서 핵심 동작 모드 플래그를 사후 설정하는 비동기 레이스 패턴을 프로젝트 전반에서 원천 차단할 것.
+
+---
+
+### 🎵 웹페이지 순수 `<audio>` 태그/스트림 감지(Sniffing) 시 최소 높이(Min-Height) 가드 차단 방지 및 오디오 전용(MP3/M4A) 추출 파이프라인
+- **실제 문제/실수**:
+  1. 웹페이지 미디어 다운로드 감지 로직(`content.js`)에서 비디오 태그의 오탐지(보이지 않는 광고, 1px 트래커 등)를 막기 위해 `rect.height < 90 || rect.width < 120` 필터 가드를 사용하고 있었음. 그러나 순수 웹 오디오 플레이어(`<audio controls>`)는 기본 브라우저 렌더링 높이가 30px ~ 54px에 불과하여 이 검사 조건에 걸려 다운로드 오버레이 버튼이 전혀 표시되지 않는 치명적인 탐지 누락이 발생함.
+  2. 또한 영상 플랫폼(YouTube 등)이나 웹페이지에서 오디오만 필요한 경우임에도 불구하고 전체 1080p/4K 대용량 영상 스트림(수백 MB)을 전부 다운로드한 후 후처리하려 하면 사용자 대역폭과 시간이 극심하게 낭비됨.
+- **방지 원칙**:
+  1. **DOM 스니핑 시 `<audio>` 태그 높이 가드 완화**:
+     - 타겟 엘리먼트가 오디오인지 여부(`isAudio = el.tagName.toLowerCase() === "audio"`)를 식별하여, 오디오 태그의 경우 최소 높이 제한을 `24px`로 완화(`minH = isAudio ? 24 : 90`)하고 전용 오디오 뱃지(클래스 `audio`) 및 음표(🎵) 아이콘을 적용할 것.
+  2. **Chrome 확장 백그라운드 오디오 MIME/확장자 자동 스니핑**:
+     - `webRequest.onHeadersReceived`에서 `audio/*` MIME 타입 및 `.mp3`, `.m4a`, `.aac`, `.flac`, `.wav`, `.ogg`, `.opus` 확장자를 자동 인터셉트하여 오디오 전용 스트림으로 분류 및 브리지 전달할 것.
+  3. **YouTube 오디오 직접 추출 및 대역폭 95% 절감 파이프라인**:
+     - YouTube 영상에서 오디오 다운로드 선택 시(MP3 320kbps 초고음질 또는 M4A 원본 무손실/고속), 비디오를 일절 받지 않고 `yt-dlp`의 `-x --audio-format mp3 --audio-quality 0` 및 `-f "ba[ext=m4a]/ba/best" -x --audio-format m4a` 옵션을 통해 순수 오디오 트랙(수 MB)만 직접 타겟팅하여 다운로드함으로써 대역폭 95% 이상 절감 및 수초 내 다운로드를 완결할 것.
+
+---
+
+### ⚠️ 크롬 확장 자바스크립트 코드 수정 시 `node -c` 구문(Syntax) 무결성 사전 검증 필수화
+- **실제 실수**:
+  - `extension/content.js`에 YouTube 오디오 다운로드 옵션을 추가하는 과정에서, 함수 종료 블록에 닫는 중괄호(`}`)가 중복 포함되어 `SyntaxError: Unexpected token 'function'` 구문 에러가 발생함.
+  - C++ 코드는 MSBuild가 컴파일 타임에 즉시 문법 에러를 잡아주지만, 자바스크립트 코드는 런타임 인터프리터 언어이므로 사전 구문 검증 없이 배포하면 Chrome이 해당 스크립트 파싱을 거부하고 실행을 통째로 중단함.
+  - 이로 인해 팝업 창(`popup.js`)에는 정상 노출되면서도 웹페이지 화면(`content.js`)에서는 다운로드 오버레이 버튼이 전혀 나타나지 않는 치명적인 UI 먹통 버그를 유발함.
+- **방지 원칙**:
+  1. `extension/` 디렉터리의 자바스크립트(`content.js`, `background.js`, `popup.js` 등)를 한 줄이라도 수정했을 때는 무조건 배포 전 `node -c <파일명>` 명령어로 구문(Syntax) 유효성을 사전 검사하여 구문 오류(code 0) 여부를 100% 확인할 것.
+  2. 스크립트 수정 완료 후에는 빌드 산출물 폴더(`bin/Release/extension/`)로의 동기화 복사를 자동 완결하여 인스톨러 및 포터블 패키지에 구버전이나 결함 코드가 남지 않도록 보장할 것.
+
+

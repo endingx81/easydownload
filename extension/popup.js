@@ -17,13 +17,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   const inputUrlEl = document.getElementById("inputUrl");
   const btnManualDl = document.getElementById("btnManualDl");
   const chkIntercept = document.getElementById("chkIntercept");
+  const chkVideoBtn = document.getElementById("chkVideoBtn");
 
-  // 1. Load intercept settings
-  chrome.storage.local.get(["interceptDownloads"], (res) => {
+  // 1. Load settings
+  chrome.storage.local.get(["interceptDownloads", "showVideoButtons"], (res) => {
     chkIntercept.checked = res.interceptDownloads !== false;
+    chkVideoBtn.checked = res.showVideoButtons !== false;
   });
   chkIntercept.addEventListener("change", () => {
     chrome.storage.local.set({ interceptDownloads: chkIntercept.checked });
+  });
+  chkVideoBtn.addEventListener("change", () => {
+    chrome.storage.local.set({ showVideoButtons: chkVideoBtn.checked });
   });
 
   // 2. Check desktop app connection
@@ -47,13 +52,34 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (activeTab.url && (activeTab.url.includes("youtube.com/watch") || activeTab.url.includes("youtu.be/") || activeTab.url.includes("youtube.com/shorts/"))) {
       if (!list.some(v => v.url === activeTab.url)) {
         let ytTitle = activeTab.title ? activeTab.title.replace(/\s*-\s*YouTube\s*$/i, "").trim() : "YouTube 동영상";
-        list.unshift({
-          url: activeTab.url,
-          title: ytTitle,
-          type: "YouTube 최고 화질 (1080p/4K)",
-          quality: "YouTube",
-          size: "최고 화질"
-        });
+        list.unshift(
+          {
+            url: activeTab.url,
+            title: ytTitle,
+            type: "YouTube 최고 화질 (1080p/4K)",
+            quality: "1080p/4K 영상",
+            size: "동영상 + 음원",
+            isAudioOnly: false
+          },
+          {
+            url: activeTab.url,
+            title: ytTitle,
+            type: "MP3 오디오 (320kbps 고음질)",
+            quality: "🎵 MP3 오디오",
+            size: "초고음질 320k",
+            isAudioOnly: true,
+            audioFormat: "mp3"
+          },
+          {
+            url: activeTab.url,
+            title: ytTitle,
+            type: "M4A 오디오 (원본 무손실/고속)",
+            quality: "🎵 M4A 오디오",
+            size: "무손실 원본",
+            isAudioOnly: true,
+            audioFormat: "m4a"
+          }
+        );
       }
     }
     renderVideos(list, activeTab);
@@ -86,12 +112,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       // Strip site suffix, clean forbidden chars, and limit to 50 chars
       displayTitle = displayTitle.replace(/\s*[-|_|–—|\|]\s*(SupJav|JavDB|MissAV|YouTube|FC2|Dailymotion|Vimeo|Twitch|Bilibili|XVIDEOS|Pornhub|SpankBang|AV01\.tv|AV01\.media|AV01)\s*$/i, "");
       displayTitle = displayTitle.replace(/^(AV01\.tv|AV01\.media|AV01)\s*[-|_|–—|\|]\s*/i, "");
-      displayTitle = displayTitle.replace(/\.(html?|m3u8|mp4|ts|mkv|webm)$/i, "");
+      displayTitle = displayTitle.replace(/\.(html?|m3u8|mp4|ts|mkv|webm|mp3|m4a|aac|flac|wav|ogg|opus)$/i, "");
       displayTitle = displayTitle.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim();
       if (displayTitle.length > 50) {
         displayTitle = displayTitle.substring(0, 50).trim();
       }
-      displayTitle = `${displayTitle}${qSuffix}.mp4`;
+      const ext = v.isAudioOnly ? `.${v.audioFormat || "mp3"}` : ".mp4";
+      displayTitle = `${displayTitle}${qSuffix}${ext}`;
 
       const titleDiv = document.createElement("div");
       titleDiv.className = "video-title";
@@ -103,7 +130,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       const qualityBadge = document.createElement("span");
       qualityBadge.className = "badge-quality";
-      qualityBadge.textContent = v.quality || (v.type && v.type.includes("M3U8") ? "HLS" : "VIDEO");
+      if (v.isAudioOnly) {
+        qualityBadge.style.background = "rgba(236, 72, 153, 0.2)";
+        qualityBadge.style.color = "#f472b6";
+        qualityBadge.style.borderColor = "rgba(236, 72, 153, 0.5)";
+      }
+      qualityBadge.textContent = v.quality || (v.type && v.type.includes("M3U8") ? "HLS" : (v.isAudioOnly ? "오디오" : "VIDEO"));
       metaDiv.appendChild(qualityBadge);
 
       // Video Dimensions / Resolution (영상 크기)
@@ -164,7 +196,9 @@ document.addEventListener("DOMContentLoaded", async () => {
           title: displayTitle,
           pageUrl: tab.url || "",
           referer: tab.url || "",
-          type: v.type || "video"
+          type: v.type || "video",
+          isAudioOnly: !!v.isAudioOnly,
+          audioFormat: v.audioFormat || "mp3"
         }, (resp) => {
           if (resp && resp.success) {
             btn.textContent = "완료!";

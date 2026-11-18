@@ -24,21 +24,31 @@
       return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
     }
 
-    function notifyVideo(v) {
-      if (!v) return;
-      const src = v.currentSrc || v.src;
+    function notifyMedia(el) {
+      if (!el) return;
+      const isAudio = el.tagName === "AUDIO";
+      const src = el.currentSrc || el.src;
       if (src && src.startsWith("http")) {
-        let dur = (v.duration && !isNaN(v.duration) && isFinite(v.duration) && v.duration > 0) ? v.duration : 0;
-        let res = (v.videoWidth && v.videoHeight) ? `${v.videoWidth}x${v.videoHeight}` : "";
+        let dur = (el.duration && !isNaN(el.duration) && isFinite(el.duration) && el.duration > 0) ? el.duration : 0;
+        let res = (!isAudio && el.videoWidth && el.videoHeight) ? `${el.videoWidth}x${el.videoHeight}` : "";
+        let audioFmt = "mp3";
+        if (src.includes(".m4a") || src.includes(".aac")) audioFmt = "m4a";
+        else if (src.includes(".flac")) audioFmt = "flac";
+        else if (src.includes(".wav")) audioFmt = "wav";
+        else if (src.includes(".ogg") || src.includes(".opus")) audioFmt = "ogg";
+
         chrome.runtime.sendMessage({
           action: "videoDetected",
           stream: {
             url: src,
             title: "", // Empty so background.js assigns top-level tab.title
-            type: src.includes(".m3u8") ? "HLS" : "HTML5 Video",
+            type: isAudio ? `${audioFmt.toUpperCase()} Audio` : (src.includes(".m3u8") ? "HLS" : "HTML5 Video"),
+            quality: isAudio ? `${audioFmt.toUpperCase()} 오디오` : "기본 화질",
             duration: dur,
             durationStr: formatDuration(dur),
             resolution: res,
+            isAudioOnly: isAudio,
+            audioFormat: audioFmt,
             detectedAt: new Date().toLocaleTimeString()
           }
         }).catch(() => {});
@@ -48,15 +58,15 @@
     const mediaEvents = ["play", "playing", "loadedmetadata", "loadeddata", "canplay", "timeupdate"];
     mediaEvents.forEach(evt => {
       window.addEventListener(evt, (e) => {
-        if (e.target && e.target.tagName === "VIDEO") {
-          notifyVideo(e.target);
+        if (e.target && (e.target.tagName === "VIDEO" || e.target.tagName === "AUDIO")) {
+          notifyMedia(e.target);
         }
       }, true);
     });
 
-    document.querySelectorAll("video").forEach(notifyVideo);
+    document.querySelectorAll("video, audio").forEach(notifyMedia);
     const subObserver = new MutationObserver(() => {
-      document.querySelectorAll("video").forEach(notifyVideo);
+      document.querySelectorAll("video, audio").forEach(notifyMedia);
     });
     subObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
 
@@ -70,6 +80,27 @@
   let detectedStreams = [];
   const activeTargets = []; // { targetElement, buttonEl }
   let currentDropdown = null;
+  let showVideoButtons = true;
+
+  // Real-time synchronization of floating video button visibility setting
+  try {
+    chrome.storage.local.get(["showVideoButtons"], (res) => {
+      if (res && res.showVideoButtons === false) {
+        showVideoButtons = false;
+        closeDropdown();
+        updatePositions();
+      }
+    });
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes.showVideoButtons !== undefined) {
+        showVideoButtons = changes.showVideoButtons.newValue !== false;
+        if (!showVideoButtons) {
+          closeDropdown();
+        }
+        updatePositions();
+      }
+    });
+  } catch (e) {}
 
   function formatDuration(sec) {
     if (!sec || isNaN(sec) || !isFinite(sec) || sec <= 0) return "";
@@ -83,10 +114,37 @@
     return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   }
 
+  // Sanitize YouTube video URLs by removing playlist & tracking noise (&list=, &start_radio=, etc.)
+  function cleanYouTubeUrl(url) {
+    if (!url) return url;
+    try {
+      const u = new URL(url);
+      if (u.hostname.includes("youtube.com") || u.hostname.includes("youtu.be")) {
+        if (u.pathname === "/watch" && u.searchParams.has("v")) {
+          const vid = u.searchParams.get("v");
+          return `${u.protocol}//${u.hostname}/watch?v=${vid}`;
+        }
+        if (u.pathname.startsWith("/shorts/")) {
+          const parts = u.pathname.split("/").filter(Boolean);
+          if (parts.length >= 2) {
+            return `${u.protocol}//${u.hostname}/shorts/${parts[1]}`;
+          }
+        }
+        if (u.hostname.includes("youtu.be")) {
+          const vid = u.pathname.replace(/^\//, "").split("/")[0];
+          if (vid) {
+            return `https://www.youtube.com/watch?v=${vid}`;
+          }
+        }
+      }
+    } catch (e) {}
+    return url;
+  }
+
   function enrichStreamsFromDOM() {
-    const videos = document.querySelectorAll("video");
-    if (!videos || videos.length === 0) return;
-    videos.forEach(v => {
+    const mediaEls = document.querySelectorAll("video, audio");
+    if (!mediaEls || mediaEls.length === 0) return;
+    mediaEls.forEach(v => {
       let dur = (v.duration && !isNaN(v.duration) && isFinite(v.duration) && v.duration > 0) ? v.duration : 0;
       let res = (v.videoWidth && v.videoHeight) ? `${v.videoWidth}x${v.videoHeight}` : "";
       const src = v.currentSrc || v.src;
@@ -310,6 +368,11 @@
         color: #34d399 !important;
         border-color: rgba(16, 185, 129, 0.3) !important;
       }
+      .easydl-badge-q.audio {
+        background: rgba(236, 72, 153, 0.18) !important;
+        color: #f472b6 !important;
+        border-color: rgba(236, 72, 153, 0.4) !important;
+      }
       .easydl-dl-btn {
         background: #0284c7 !important;
         border: 1px solid #38bdf8 !important;
@@ -435,20 +498,23 @@
     // Strip site suffix, clean forbidden chars, and limit to 50 chars
     streamTitle = streamTitle.replace(/\s*[-|_|–—|\|]\s*(SupJav|JavDB|MissAV|YouTube|FC2|Dailymotion|Vimeo|Twitch|Bilibili|XVIDEOS|Pornhub|SpankBang|AV01\.tv|AV01\.media|AV01)\s*$/i, "");
     streamTitle = streamTitle.replace(/^(AV01\.tv|AV01\.media|AV01)\s*[-|_|–—|\|]\s*/i, "");
-    streamTitle = streamTitle.replace(/\.(html?|m3u8|mp4|ts|mkv|webm)$/i, "");
+    streamTitle = streamTitle.replace(/\.(html?|m3u8|mp4|ts|mkv|webm|mp3|m4a|aac|flac|wav|ogg|opus)$/i, "");
     streamTitle = streamTitle.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim();
     if (streamTitle.length > 50) {
       streamTitle = streamTitle.substring(0, 50).trim();
     }
-    streamTitle = `${streamTitle}${qSuffix}.mp4`;
+    const ext = stream.isAudioOnly ? `.${stream.audioFormat || "mp3"}` : ".mp4";
+    streamTitle = `${streamTitle}${qSuffix}${ext}`;
 
     chrome.runtime.sendMessage({
       action: "downloadVideo",
-      videoUrl: stream.url,
+      videoUrl: cleanYouTubeUrl(stream.url),
       title: streamTitle,
-      pageUrl: window.location.href,
+      pageUrl: cleanYouTubeUrl(window.location.href),
       referer: stream.referer || window.location.href,
-      type: stream.type || "hls"
+      type: stream.type || "hls",
+      isAudioOnly: !!stream.isAudioOnly,
+      audioFormat: stream.audioFormat || "mp3"
     }, (res) => {
       if (dlBtn) {
         if (res && res.success) {
@@ -496,22 +562,49 @@
 
     // If on YouTube, always ensure current active video URL is 100% synchronized!
     if (location.hostname.includes("youtube.com") || location.hostname.includes("youtu.be")) {
-      const currentUrl = location.href;
-      if (currentUrl.includes("/watch") || currentUrl.includes("/shorts/") || location.hostname.includes("youtu.be")) {
+      const cleanUrl = cleanYouTubeUrl(location.href);
+      if (cleanUrl.includes("/watch") || cleanUrl.includes("/shorts/") || location.hostname.includes("youtu.be")) {
         let ytTitle = document.title ? document.title.replace(/\s*-\s*YouTube\s*$/i, "").trim() : "YouTube 동영상";
         const ytVideo = document.querySelector("video.html5-main-video") || document.querySelector("video");
         let dur = (ytVideo && ytVideo.duration && !isNaN(ytVideo.duration) && isFinite(ytVideo.duration)) ? ytVideo.duration : 0;
         let res = (ytVideo && ytVideo.videoWidth && ytVideo.videoHeight) ? `${ytVideo.videoWidth}x${ytVideo.videoHeight}` : "";
-        detectedStreams = [{
-          url: currentUrl,
-          title: ytTitle,
-          type: "YouTube 최고 화질 (1080p/4K)",
-          quality: "YouTube",
-          duration: dur,
-          durationStr: formatDuration(dur),
-          resolution: res,
-          size: "최고 화질"
-        }];
+        detectedStreams = [
+          {
+            url: cleanUrl,
+            title: ytTitle,
+            type: "YouTube 최고 화질 (1080p/4K)",
+            quality: "1080p/4K 영상",
+            duration: dur,
+            durationStr: formatDuration(dur),
+            resolution: res,
+            size: "동영상 + 음원",
+            isAudioOnly: false
+          },
+          {
+            url: cleanUrl,
+            title: ytTitle,
+            type: "MP3 오디오 (320kbps 고음질)",
+            quality: "🎵 MP3 오디오",
+            duration: dur,
+            durationStr: formatDuration(dur),
+            resolution: "",
+            size: "초고음질 320k",
+            isAudioOnly: true,
+            audioFormat: "mp3"
+          },
+          {
+            url: cleanUrl,
+            title: ytTitle,
+            type: "M4A 오디오 (원본 무손실/고속)",
+            quality: "🎵 M4A 오디오",
+            duration: dur,
+            durationStr: formatDuration(dur),
+            resolution: "",
+            size: "무손실 원본",
+            isAudioOnly: true,
+            audioFormat: "m4a"
+          }
+        ];
         renderDropdownMenu(buttonEl);
         return;
       }
@@ -596,7 +689,7 @@
 
         const titleDiv = document.createElement("div");
         titleDiv.className = "easydl-stream-title";
-        let displayTitle = (s.title || document.title || "웹_동영상").trim();
+        let displayTitle = (s.title || document.title || "웹_미디어").trim();
         let qSuffix = "";
         const qMatch = displayTitle.match(/(\s*\[[^\]]+\])/);
         if (qMatch) {
@@ -605,23 +698,25 @@
         }
         displayTitle = displayTitle.replace(/\s*[-|_|–—|\|]\s*(SupJav|JavDB|MissAV|YouTube|FC2|Dailymotion|Vimeo|Twitch|Bilibili|XVIDEOS|Pornhub|SpankBang|AV01\.tv|AV01\.media|AV01)\s*$/i, "");
         displayTitle = displayTitle.replace(/^(AV01\.tv|AV01\.media|AV01)\s*[-|_|–—|\|]\s*/i, "");
-        displayTitle = displayTitle.replace(/\.(html?|m3u8|mp4|ts|mkv|webm)$/i, "");
+        displayTitle = displayTitle.replace(/\.(html?|m3u8|mp4|ts|mkv|webm|mp3|m4a|aac|flac|wav|ogg|opus)$/i, "");
         displayTitle = displayTitle.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim();
         if (displayTitle.length > 50) {
           displayTitle = displayTitle.substring(0, 50).trim();
         }
-        displayTitle = `${displayTitle}${qSuffix}.mp4`;
+        const ext = s.isAudioOnly ? `.${s.audioFormat || "mp3"}` : ".mp4";
+        displayTitle = `${displayTitle}${qSuffix}${ext}`;
         titleDiv.textContent = displayTitle;
         titleDiv.title = titleDiv.textContent;
 
         const metaDiv = document.createElement("div");
         metaDiv.className = "easydl-stream-meta";
 
-        const q = s.quality || (s.type && s.type.includes("HLS") ? "HLS" : "VIDEO");
+        const q = s.quality || (s.type && s.type.includes("HLS") ? "HLS" : (s.isAudioOnly ? "오디오" : "VIDEO"));
         const isHigh = q.includes("1080") || q.includes("4K") || q.includes("HD");
+        const isAudio = s.isAudioOnly || q.includes("오디오") || q.includes("MP3") || q.includes("M4A") || q.includes("Audio");
 
         const qBadge = document.createElement("span");
-        qBadge.className = `easydl-badge-q ${isHigh ? "high" : ""}`;
+        qBadge.className = `easydl-badge-q ${isHigh ? "high" : ""} ${isAudio ? "audio" : ""}`.trim();
         qBadge.textContent = q;
         metaDiv.appendChild(qBadge);
 
@@ -751,11 +846,11 @@
     updateAllButtonsUI();
   }
 
-  // Scan Top Window for <video> and Player <iframe> elements
+  // Scan Top Window for <video>, <audio> and Player <iframe> elements
   function scanPageTargets() {
-    // 1. Direct videos
-    const videos = document.querySelectorAll("video");
-    videos.forEach(v => attachButtonToTarget(v));
+    // 1. Direct videos & audio elements
+    const mediaEls = document.querySelectorAll("video, audio");
+    mediaEls.forEach(m => attachButtonToTarget(m));
 
     // 2. Player Iframes (e.g., embed, recordplay, player)
     const iframes = document.querySelectorAll("iframe");
@@ -768,7 +863,7 @@
     updatePositions();
   }
 
-  // Update position of all buttons to stay STRICTLY OUTSIDE and RIGHT ABOVE the video / iframe
+  // Update position of all buttons to stay STRICTLY OUTSIDE and RIGHT ABOVE the video / iframe / audio
   function updatePositions() {
     for (let i = activeTargets.length - 1; i >= 0; --i) {
       const { targetElement, buttonEl } = activeTargets[i];
@@ -778,9 +873,17 @@
         continue;
       }
 
+      if (!showVideoButtons) {
+        buttonEl.style.display = "none";
+        continue;
+      }
+
       const rect = targetElement.getBoundingClientRect();
+      const isAudio = targetElement.tagName === "AUDIO";
+      const minW = isAudio ? 120 : 160;
+      const minH = isAudio ? 24 : 90;
       // If element is not displayed, too small, or completely scrolled off screen
-      if (rect.width < 160 || rect.height < 90 || rect.bottom <= 40 || rect.top >= window.innerHeight) {
+      if (rect.width < minW || rect.height < minH || rect.bottom <= 30 || rect.top >= window.innerHeight) {
         buttonEl.style.display = "none";
         continue;
       }
@@ -788,7 +891,7 @@
       buttonEl.style.display = "inline-flex";
 
       // Positioning:
-      // STRICTLY ABOVE the video element (rect.top - 34px)
+      // STRICTLY ABOVE the media element (rect.top - 34px)
       // Never render inside the video picture
       let top = rect.top - 34;
       if (top < 4 && rect.bottom > 50) {
@@ -842,7 +945,7 @@
   const topMediaEvents = ["play", "playing", "loadedmetadata", "loadeddata", "canplay", "timeupdate"];
   topMediaEvents.forEach(evt => {
     window.addEventListener(evt, (e) => {
-      if (e.target && e.target.tagName === "VIDEO") {
+      if (e.target && (e.target.tagName === "VIDEO" || e.target.tagName === "AUDIO")) {
         enrichStreamsFromDOM();
       }
     }, true);
@@ -861,18 +964,19 @@
     let lastYouTubeUrl = "";
 
     function checkYouTubeVideo() {
-      const currentUrl = location.href;
+      const rawUrl = location.href;
+      const currentUrl = cleanYouTubeUrl(rawUrl);
       const isVideoPage = currentUrl.includes("/watch") || currentUrl.includes("/shorts/") || location.hostname.includes("youtu.be");
 
       if (!isVideoPage) {
-        lastYouTubeUrl = currentUrl;
+        lastYouTubeUrl = rawUrl;
         return;
       }
 
       // If URL changed to a different video clip, completely reset previous cached streams!
-      if (currentUrl !== lastYouTubeUrl) {
+      if (rawUrl !== lastYouTubeUrl) {
         detectedStreams = [];
-        lastYouTubeUrl = currentUrl;
+        lastYouTubeUrl = rawUrl;
         chrome.runtime.sendMessage({ action: "resetTabVideos", url: currentUrl }).catch(() => {});
       }
 
@@ -899,7 +1003,7 @@
 
       // YouTube titles & video dimensions often update 200~500ms after SPA navigation
       setTimeout(() => {
-        if (location.href === currentUrl) {
+        if (location.href === rawUrl) {
           if (document.title) {
             let updatedTitle = document.title.replace(/\s*-\s*YouTube\s*$/i, "").trim();
             if (updatedTitle && detectedStreams.length > 0 && detectedStreams[0].url === currentUrl) {

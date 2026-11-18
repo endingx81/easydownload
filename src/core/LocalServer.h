@@ -19,6 +19,8 @@ struct DownloadRequest {
     std::wstring cookies;
     std::wstring userAgent;
     bool isVideo{ false };
+    bool isAudioOnly{ false };
+    std::wstring audioFormat;
 };
 
 struct VideoDetectedInfo {
@@ -28,6 +30,8 @@ struct VideoDetectedInfo {
     std::wstring type;
     std::wstring referer;
     std::wstring cookies;
+    bool isAudioOnly{ false };
+    std::wstring audioFormat;
 };
 
 class LocalServer {

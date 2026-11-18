@@ -23,7 +23,9 @@ public:
         bool isHls = false,
         const std::wstring& dependsOnId = L"",
         const std::wstring& userAgent = L"",
-        const std::wstring& originalUrl = L""
+        const std::wstring& originalUrl = L"",
+        bool isAudioOnly = false,
+        const std::wstring& audioFormat = L"mp3"
     );
 
     bool StartTask(const std::wstring& id);

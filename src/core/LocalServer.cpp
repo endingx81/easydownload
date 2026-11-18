@@ -218,7 +218,7 @@ void LocalServer::HandleClient(SOCKET clientSock) {
         } else if (line.find("GET /ping") != std::string::npos || line.find("GET /status") != std::string::npos) {
             bool dpiRunning = DpiBypassManager::Instance().IsRunning();
             int dpiMode = Settings::Instance().GetDpiBypassMode();
-            std::string json = "{\"status\":\"ok\",\"app\":\"EasyDownload\",\"version\":\"1.5.5\",\"dpi_running\":" +
+            std::string json = "{\"status\":\"ok\",\"app\":\"EasyDownload\",\"version\":\"1.6.4\",\"dpi_running\":" +
                                std::string(dpiRunning ? "true" : "false") +
                                ",\"dpi_mode\":" + std::to_string(dpiMode) +
                                ",\"doh_configured\":" + std::string(DpiBypassManager::IsChromeDohConfigured() ? "true" : "false") + "}";
@@ -239,6 +239,9 @@ void LocalServer::HandleClient(SOCKET clientSock) {
             req.cookies = ExtractJsonString(body, "cookies");
             req.userAgent = ExtractJsonString(body, "userAgent");
             req.isVideo = (body.find("\"isVideo\":true") != std::string::npos);
+            req.isAudioOnly = (body.find("\"isAudioOnly\":true") != std::string::npos ||
+                               body.find("\"isAudioOnly\":\"true\"") != std::string::npos);
+            req.audioFormat = ExtractJsonString(body, "audioFormat");
 
             if (!req.url.empty() && m_onDownloadRequest) {
                 m_onDownloadRequest(req);
@@ -261,6 +264,12 @@ void LocalServer::HandleClient(SOCKET clientSock) {
             info.referer = ExtractJsonString(body, "referer");
             if (info.referer.empty()) info.referer = info.pageUrl;
             info.cookies = ExtractJsonString(body, "cookies");
+            info.isAudioOnly = (body.find("\"isAudioOnly\":true") != std::string::npos ||
+                                body.find("\"isAudioOnly\":\"true\"") != std::string::npos);
+            info.audioFormat = ExtractJsonString(body, "audioFormat");
+            if (info.audioFormat.empty()) {
+                info.audioFormat = L"mp3";
+            }
 
             if (!info.videoUrl.empty() && m_onVideoDetected) {
                 m_onVideoDetected(info);

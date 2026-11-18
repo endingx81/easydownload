@@ -51,7 +51,11 @@ public:
     static bool IsYtDlpAvailable(std::wstring& outPath);
     static std::wstring FindFfmpegLocation();
     static void UpdateYtDlpInBackground();
-    static std::wstring GetVideoTitleWithYtDlp(const std::wstring& videoPageUrl);
+    static std::wstring CleanYouTubeUrl(const std::wstring& url);
+    static std::wstring GetVideoTitleWithYtDlp(
+        const std::wstring& videoPageUrl,
+        const std::wstring& cookies = L""
+    );
 
     typedef std::function<void(int percent, int64_t downloadedBytes, int64_t totalBytes, int64_t speedBytesPerSec)> YtDlpProgressCallback;
 
@@ -59,7 +63,11 @@ public:
         const std::wstring& videoPageUrl,
         const std::wstring& targetFilePath,
         std::atomic<bool>& abortFlag,
-        YtDlpProgressCallback progressCallback
+        YtDlpProgressCallback progressCallback,
+        const std::wstring& cookies = L"",
+        std::wstring* pOutError = nullptr,
+        bool isAudioOnly = false,
+        const std::wstring& audioFormat = L"mp3"
     );
 
 private:

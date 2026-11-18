@@ -721,7 +721,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             DestroyWindow(m_hWnd);
             break;
         case ID_ABOUT:
-            MessageBoxW(m_hWnd, L"EasyDownload v1.6.0\n\n초고속 멀티스레드 분할 다운로드 가속기\n크롬 확장 연동 및 비디오 스트림 다운로더\nYouTube / M3U8 고화질 자동 병합 다운로더\nChrome 보안 DNS(DoH) & DPI 차단 우회 내장",
+            MessageBoxW(m_hWnd, L"EasyDownload v1.6.4\n\n초고속 멀티스레드 분할 다운로드 가속기\n크롬 확장 연동 및 비디오/오디오 스트림 다운로더\nYouTube 동영상 및 MP3/M4A 음원 초고속 추출\nChrome 보안 DNS(DoH) & DPI 차단 우회 내장",
                 L"EasyDownload 정보", MB_OK | MB_ICONINFORMATION);
             break;
         }
@@ -844,7 +844,10 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             WCHAR combined[MAX_PATH] = { 0 };
             PathCombineW(combined, baseDir.c_str(), fname.c_str());
 
-            auto task = DownloadManager::Instance().AddTask(req->url, combined, req->referer, req->cookies, 8, true, false, L"", req->userAgent, req->originalUrl);
+            auto task = DownloadManager::Instance().AddTask(
+                req->url, combined, req->referer, req->cookies, 8, true, false,
+                L"", req->userAgent, req->originalUrl, req->isAudioOnly, req->audioFormat
+            );
             if (task && isYouTube) {
                 task->SetIsYouTube(true);
             }
@@ -880,7 +883,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 fname = HttpEngine::ExtractFilenameFromUrl(info->videoUrl);
             }
             if (fname.empty()) {
-                fname = L"video_stream";
+                fname = info->isAudioOnly ? L"audio_stream" : L"video_stream";
             }
 
             if (fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
@@ -889,16 +892,45 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 fname = fname.substr(0, fname.length() - 4);
             }
 
-            if (fname.rfind(L".mp4") == std::wstring::npos && fname.rfind(L".ts") == std::wstring::npos &&
-                fname.rfind(L".mkv") == std::wstring::npos && fname.rfind(L".webm") == std::wstring::npos) {
-                fname += L".mp4";
+            if (info->isAudioOnly) {
+                std::wstring targetExt = info->audioFormat.empty() ? L".mp3" : (L"." + info->audioFormat);
+                // Strip existing video extensions if present
+                size_t dotPos = fname.find_last_of(L'.');
+                if (dotPos != std::wstring::npos) {
+                    std::wstring existingExt = fname.substr(dotPos);
+                    for (auto& c : existingExt) c = (wchar_t)towlower(c);
+                    if (existingExt == L".mp4" || existingExt == L".ts" || existingExt == L".mkv" ||
+                        existingExt == L".webm" || existingExt == L".m4v" || existingExt == L".flv") {
+                        fname = fname.substr(0, dotPos);
+                    }
+                }
+                if (fname.rfind(targetExt) == std::wstring::npos) {
+                    fname += targetExt;
+                }
+            } else {
+                if (fname.rfind(L".mp4") == std::wstring::npos && fname.rfind(L".ts") == std::wstring::npos &&
+                    fname.rfind(L".mkv") == std::wstring::npos && fname.rfind(L".webm") == std::wstring::npos) {
+                    fname += L".mp4";
+                }
             }
 
             std::wstring baseDir = Settings::Instance().GetTargetFolderForFilename(fname);
             WCHAR combined[MAX_PATH] = { 0 };
             PathCombineW(combined, baseDir.c_str(), fname.c_str());
 
-            auto task = DownloadManager::Instance().AddTask(info->videoUrl, combined, info->referer, info->cookies, 8, true, isHls);
+            bool isYouTube = (info->videoUrl.find(L"youtube.com/") != std::wstring::npos || info->videoUrl.find(L"youtu.be/") != std::wstring::npos);
+            if (isYouTube) {
+                info->videoUrl = HlsDownloader::CleanYouTubeUrl(info->videoUrl);
+            }
+            auto task = DownloadManager::Instance().AddTask(
+                info->videoUrl, combined, info->referer, info->cookies, 8, true, isHls,
+                L"", L"", L"", info->isAudioOnly, info->audioFormat
+            );
+            if (task) {
+                if (isYouTube) {
+                    task->SetIsYouTube(true);
+                }
+            }
             RefreshTasksList();
             if (task) {
                 DownloadProgressDialog::Show(m_hWnd, task);

@@ -205,11 +205,16 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 8px 14px;
+      padding: 10px 14px;
       background: #0f172a;
       border-top: 1px solid #1e293b;
       font-size: 11px;
       color: #64748b;
+    }
+    .switch-col {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
     }
     .switch-label {
       display: flex;
@@ -217,10 +222,16 @@
       gap: 6px;
       cursor: pointer;
       color: #94a3b8;
+      font-size: 11.5px;
     }
     .switch-label input {
       accent-color: #0284c7;
       cursor: pointer;
+    }
+    .version-text {
+      align-self: flex-end;
+      font-size: 10.5px;
+      color: #475569;
     }
   </style>
 </head>
@@ -269,11 +280,17 @@
   </div>
 
   <div class="footer">
-    <label class="switch-label">
-      <input type="checkbox" id="chkIntercept" checked />
-      <span>브라우저 다운로드 자동 가속</span>
-    </label>
-    <span>v1.4.2</span>
+    <div class="switch-col">
+      <label class="switch-label">
+        <input type="checkbox" id="chkIntercept" checked />
+        <span>브라우저 파일 다운로드 가속</span>
+      </label>
+      <label class="switch-label">
+        <input type="checkbox" id="chkVideoBtn" checked />
+        <span>동영상 다운로드 플로팅 버튼 표시</span>
+      </label>
+    </div>
+    <span class="version-text">v1.6.2</span>
   </div>
 
   <script src="popup.js"></script>

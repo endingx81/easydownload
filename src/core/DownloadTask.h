@@ -253,6 +253,16 @@ public:
     void SetIsHls(bool hls) { m_isHls = hls; }
     bool IsYouTube() const { return m_isYouTube; }
     void SetIsYouTube(bool yt) { m_isYouTube = yt; }
+    bool IsAudioOnly() const { return m_isAudioOnly; }
+    void SetIsAudioOnly(bool audio) { m_isAudioOnly = audio; }
+    std::wstring GetAudioFormat() const {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        return m_audioFormat;
+    }
+    void SetAudioFormat(const std::wstring& fmt) {
+        std::lock_guard<std::mutex> lock(m_metaMutex);
+        m_audioFormat = fmt;
+    }
 
     std::vector<ChunkProgress> GetChunksProgress();
 
@@ -287,6 +297,8 @@ private:
     std::atomic<int> m_activeWorkers{ 0 };
     bool m_isHls{ false };
     bool m_isYouTube{ false };
+    bool m_isAudioOnly{ false };
+    std::wstring m_audioFormat{ L"mp3" };
 
     std::atomic<TaskStatus> m_status{ TaskStatus::Queued };
     std::wstring m_errorMessage;

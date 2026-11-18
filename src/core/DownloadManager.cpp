@@ -50,7 +50,9 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
     bool isHls,
     const std::wstring& dependsOnId,
     const std::wstring& userAgent,
-    const std::wstring& originalUrl
+    const std::wstring& originalUrl,
+    bool isAudioOnly,
+    const std::wstring& audioFormat
 ) {
     if (url.empty()) return nullptr;
 
@@ -67,13 +69,19 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
                          (url.find(L"index.txt") != std::wstring::npos) ||
                          (url.find(L"master.txt") != std::wstring::npos);
 
+    std::wstring audioExt = audioFormat.empty() ? L".mp3" : (L"." + audioFormat);
+
     if (actualPath.empty()) {
         std::wstring fname = HttpEngine::ExtractFilenameFromUrl(url);
         if (HttpEngine::IsGenericFilename(fname) && !referer.empty()) {
             std::wstring refTitle = HttpEngine::ExtractTitleFromRefererUrl(referer);
-            if (!refTitle.empty()) fname = refTitle + (isHlsResolved ? L".mp4" : L"");
+            if (!refTitle.empty()) fname = refTitle + (isAudioOnly ? audioExt : (isHlsResolved ? L".mp4" : L""));
         }
-        if (isHlsResolved) {
+        if (isAudioOnly) {
+            size_t dotPos = fname.find_last_of(L'.');
+            if (dotPos != std::wstring::npos) fname = fname.substr(0, dotPos);
+            fname += audioExt;
+        } else if (isHlsResolved) {
             if (fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
                 fname = fname.substr(0, fname.length() - 5) + L".mp4";
             } else if (fname.length() >= 4 && _wcsicmp(fname.c_str() + fname.length() - 4, L".txt") == 0) {
@@ -90,9 +98,13 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
         std::wstring fname = HttpEngine::ExtractFilenameFromUrl(url);
         if (HttpEngine::IsGenericFilename(fname) && !referer.empty()) {
             std::wstring refTitle = HttpEngine::ExtractTitleFromRefererUrl(referer);
-            if (!refTitle.empty()) fname = refTitle + (isHlsResolved ? L".mp4" : L"");
+            if (!refTitle.empty()) fname = refTitle + (isAudioOnly ? audioExt : (isHlsResolved ? L".mp4" : L""));
         }
-        if (isHlsResolved) {
+        if (isAudioOnly) {
+            size_t dotPos = fname.find_last_of(L'.');
+            if (dotPos != std::wstring::npos) fname = fname.substr(0, dotPos);
+            fname += audioExt;
+        } else if (isHlsResolved) {
             if (fname.length() >= 5 && _wcsicmp(fname.c_str() + fname.length() - 5, L".m3u8") == 0) {
                 fname = fname.substr(0, fname.length() - 5) + L".mp4";
             } else if (fname.length() >= 4 && _wcsicmp(fname.c_str() + fname.length() - 4, L".txt") == 0) {
@@ -106,7 +118,18 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
         actualPath = combined;
     }
 
-    if (isHlsResolved) {
+    if (isAudioOnly) {
+        size_t dotPos = actualPath.find_last_of(L".\\/");
+        if (dotPos != std::wstring::npos && actualPath[dotPos] == L'.') {
+            std::wstring curExt = actualPath.substr(dotPos);
+            for (auto& c : curExt) c = (wchar_t)towlower(c);
+            if (curExt == L".m3u8" || curExt == L".txt" || curExt == L".mp4" || curExt == L".ts" || curExt == L".mkv") {
+                actualPath = actualPath.substr(0, dotPos) + audioExt;
+            }
+        } else {
+            actualPath += audioExt;
+        }
+    } else if (isHlsResolved) {
         if (actualPath.length() >= 5 && _wcsicmp(actualPath.c_str() + actualPath.length() - 5, L".m3u8") == 0) {
             actualPath = actualPath.substr(0, actualPath.length() - 5) + L".mp4";
         } else if (actualPath.length() >= 4 && _wcsicmp(actualPath.c_str() + actualPath.length() - 4, L".txt") == 0) {
@@ -126,6 +149,10 @@ std::shared_ptr<DownloadTask> DownloadManager::AddTask(
     }
     if (isHlsResolved) {
         task->SetIsHls(true);
+    }
+    if (isAudioOnly) {
+        task->SetIsAudioOnly(true);
+        task->SetAudioFormat(audioFormat.empty() ? L"mp3" : audioFormat);
     }
     task->SetOnStatusChanged([this](DownloadTask*) {
         CheckQueue();

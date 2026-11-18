@@ -460,14 +460,16 @@ void DownloadTask::WorkerLoop() {
 
     if (isYouTube) {
         m_isYouTube = true;
+        m_url = HlsDownloader::CleanYouTubeUrl(m_url);
         m_status = TaskStatus::Downloading;
         if (m_onStatusChanged) m_onStatusChanged(this);
 
         // 1. Fetch real video title with yt-dlp if available
-        std::wstring realTitle = HlsDownloader::GetVideoTitleWithYtDlp(m_url);
+        std::wstring realTitle = HlsDownloader::GetVideoTitleWithYtDlp(m_url, m_cookies);
         if (!realTitle.empty()) {
             std::lock_guard<std::mutex> lk(m_metaMutex);
-            m_filename = realTitle + L".mp4";
+            std::wstring ext = m_isAudioOnly ? (m_audioFormat.empty() ? L".mp3" : (L"." + m_audioFormat)) : L".mp4";
+            m_filename = realTitle + ext;
             WCHAR dir[MAX_PATH] = { 0 };
             wcscpy_s(dir, m_savePath.c_str());
             PathRemoveFileSpecW(dir);
@@ -499,6 +501,7 @@ void DownloadTask::WorkerLoop() {
         m_downloadedBytes = 0;
         m_currentSpeed = 0;
 
+        std::wstring ytError;
         bool ok = HlsDownloader::DownloadWithYtDlp(
             m_url,
             m_savePath,
@@ -537,7 +540,11 @@ void DownloadTask::WorkerLoop() {
                     }
                 }
                 if (m_onStatusChanged) m_onStatusChanged(this);
-            }
+            },
+            m_cookies,
+            &ytError,
+            m_isAudioOnly,
+            m_audioFormat
         );
 
         m_activeWorkers = 0;
@@ -580,7 +587,11 @@ void DownloadTask::WorkerLoop() {
             if (!m_abortFlag && !m_pauseFlag) {
                 m_status = TaskStatus::Error;
                 std::lock_guard<std::mutex> lk(m_metaMutex);
-                m_errorMessage = L"YouTube 다운로드 실패 (yt-dlp 실행 오류 또는 차단)";
+                if (!ytError.empty()) {
+                    m_errorMessage = ytError;
+                } else {
+                    m_errorMessage = L"YouTube 다운로드 실패 (yt-dlp 실행 오류 또는 차단)";
+                }
             } else {
                 m_status = TaskStatus::Paused;
                 m_speedTracker.Reset();
@@ -1042,6 +1053,8 @@ void DownloadTask::WorkerLoop() {
             std::lock_guard<std::mutex> lk(m_metaMutex);
             if (info.statusCode == 403 && (m_url.find(L"megaup.net") != std::wstring::npos || orig.find(L"megaup.net") != std::wstring::npos)) {
                 m_errorMessage = L"인간 확인(Cloudflare Turnstile) 차단 페이지 감지 (더블클릭하여 브라우저에서 인증 필요)";
+            } else if (info.statusCode == 404 && (m_url.find(L"two_factor_authentication") != std::wstring::npos || m_url.find(L"recovery_download") != std::wstring::npos)) {
+                m_errorMessage = L"브라우저 전용 폼/인증 페이지 감지 (웹 브라우저에서 직접 다운로드 필요)";
             } else {
                 m_errorMessage = L"HTTP 오류 코드: " + std::to_wstring(info.statusCode);
             }
@@ -1200,6 +1213,9 @@ void DownloadTask::WorkerLoop() {
         cp.downloadedBytes = 0;
         cp.completed = false;
         m_chunks.push_back(cp);
+
+        m_chunkDynamicEnds[0].store(cp.endByte);
+        m_chunkBytesReceivedInWindow[0].store(0);
 
         RangeItem item = { 0, 0, (info.acceptRanges ? cp.endByte : -1) };
         m_rangeQueue.push_back(item);
